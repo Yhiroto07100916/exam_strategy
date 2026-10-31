@@ -478,6 +478,17 @@ def analysis():
     }
 
 
+@app.get("/api/schools/official-sources")
+def list_official_sources():
+    path = DATA / "official_sources.json"
+    if not path.exists():
+        return {"admission_year": None, "official_sources": []}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise HTTPException(500, "公式資料一覧を読み込めません")
+
+
 @app.get("/api/schools")
 def list_schools():
     connection = db()

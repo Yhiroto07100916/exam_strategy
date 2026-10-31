@@ -13,7 +13,7 @@ import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from pypdf import PdfReader
 
 from .ocr import MAX_PDF_BYTES, preview_pdf_ocr
@@ -24,6 +24,7 @@ WEB = ROOT / "web"
 DB = DATA / "exam_strategy.sqlite3"
 from .main_models import SUBJECTS
 from .target_routes import router as target_router
+from .school_targeting import SchoolScoringModel, SchoolTargetAllocationRequest, allocate_school_targets
 SCORE_COLUMNS = [
     "id", "date", "exam_name", "exam_type", "subject", "score",
     "max_score", "deviation", "rank", "examinees", "created_at",
@@ -207,6 +208,12 @@ class SchoolRuleInput(BaseModel):
         if self.verification_status == "確認済み":
             if not self.official_source_url or not self.verified_on or not self.rule_data:
                 raise ValueError("確認済みには公式資料URL・確認日・確認した選抜データが必要です")
+            try:
+                SchoolScoringModel.model_validate(self.rule_data.get("scoring_model"))
+            except (ValidationError, TypeError, ValueError) as error:
+                raise ValueError(
+                    "確認済みの選抜情報には、科目別配点・固定評価項目・資料ページを含むscoring_modelが必要です"
+                ) from error
         return self
 
 
@@ -598,6 +605,35 @@ def update_school_rule(rule_id: str, item: SchoolRuleInput):
     finally:
         connection.close()
     return {"id": rule_id, **data}
+
+
+@app.post("/api/schools/{school_id}/rules/{rule_id}/allocate")
+def allocate_school_rule(
+    school_id: str,
+    rule_id: str,
+    request: SchoolTargetAllocationRequest,
+):
+    connection = db()
+    try:
+        row = connection.execute(
+            """SELECT verification_status, official_source_url, verified_on, rule_data
+               FROM school_rules WHERE id=? AND school_id=?""",
+            (rule_id, school_id),
+        ).fetchone()
+    finally:
+        connection.close()
+    if row is None:
+        raise HTTPException(404, "学校または選抜ルールが見つかりません")
+    if row["verification_status"] != "確認済み":
+        raise HTTPException(409, "公式資料を確認済みにした選抜ルールだけ計算に使用できます")
+    if not row["official_source_url"] or not row["verified_on"]:
+        raise HTTPException(409, "公式資料URLと確認日が登録されていません")
+    try:
+        rule_data = json.loads(row["rule_data"])
+        scoring_model = SchoolScoringModel.model_validate(rule_data.get("scoring_model"))
+        return allocate_school_targets(scoring_model, request)
+    except (ValidationError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise HTTPException(422, detail=str(error) or "選抜ルールの計算形式を確認してください")
 
 
 @app.delete("/api/school-rules/{rule_id}", status_code=204)

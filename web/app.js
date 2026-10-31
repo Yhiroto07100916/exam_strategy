@@ -18,7 +18,7 @@ const form=new FormData();form.append('file',file);
 try{
 const result=await api('/import/pdf/ocr-preview',{method:'POST',body:form});
 $('#pdf-text').value=result.text;ocrCandidates=result.candidates||[];
-const today=localDateValue(),examName=file.name.replace(/\\.pdf$/i,'');
+const today=localDateValue(),examName=file.name.replace(/\.pdf$/i,'');
 $('#ocr-candidates').innerHTML=ocrCandidates.map((x,i)=>'<div class="ocr-row"><p>ページ '+x.page+' / 行 '+x.line+'：'+esc(x.ocr_text)+'</p><div class="ocr-fields"><label>実施日<input type="date" data-ocr-date value="'+today+'" required></label><label>模試名<input data-ocr-name value="'+esc(examName)+'" required></label><label>科目<select data-ocr-subject>'+subjects.map(s=>'<option value="'+s+'" '+(s===x.subject?'selected':'')+'>'+s+'</option>').join('')+'</select></label><label>得点<input type="number" min="0" data-ocr-score value="'+x.score_candidate+'" required></label><label>満点<input type="number" min="1" data-ocr-max value="'+x.max_score_candidate+'" required></label></div><button type="button" data-ocr-remove>この候補を除外</button></div>').join('')||'<p class="note">得点候補が見つかりませんでした。OCRテキストを確認し、必要なら成績管理から手入力してください。</p>';
 $('#ocr-confirm').disabled=ocrCandidates.length===0;toast('OCR候補を抽出しました。内容を確認してください');
 }catch(x){toast(x.message)}

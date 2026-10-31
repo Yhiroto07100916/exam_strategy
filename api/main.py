@@ -16,6 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pypdf import PdfReader
 
+from .ocr import preview_pdf_ocr
+
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 WEB = ROOT / "web"
@@ -132,6 +134,10 @@ class Question(BaseModel):
 class Settings(BaseModel):
     profile: dict[str, Any] = Field(default_factory=dict)
     target: dict[str, Any] = Field(default_factory=dict)
+\n\nclass OCRConfirmRequest(BaseModel):
+    scores: list[Score] = Field(min_length=1, max_length=100)
+
+
 
 
 @app.on_event("startup")
@@ -515,6 +521,55 @@ async def import_pdf(file: UploadFile = File(...)):
         "text": extracted,
         "needs_ocr": not any(text.strip() for text in texts),
     }
+
+
+@app.post("/api/import/pdf/ocr-preview")
+async def preview_pdf_ocr_endpoint(file: UploadFile = File(...)):
+    if not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(415, "PDFファイルを選択してください")
+    try:
+        return preview_pdf_ocr(await file.read())
+    except RuntimeError as error:
+        raise HTTPException(503, str(error))
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+
+
+@app.post("/api/import/ocr-confirm")
+def confirm_ocr_import(request: OCRConfirmRequest):
+    items = [item.model_dump() for item in request.scores]
+    duplicates = 0
+    imported = 0
+    connection = db()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        rows = connection.execute(
+            "SELECT date, exam_name, exam_type, subject FROM scores"
+        ).fetchall()
+        existing_keys = {
+            (row["date"], row["exam_name"], row["exam_type"], row["subject"])
+            for row in rows
+        }
+        for data in items:
+            key = (data["date"], data["exam_name"], data["exam_type"], data["subject"])
+            if key in existing_keys:
+                duplicates += 1
+                continue
+            existing_keys.add(key)
+            data["id"] = str(uuid.uuid4())
+            data["created_at"] = datetime.now(timezone.utc).isoformat()
+            connection.execute(
+                f"INSERT INTO scores ({','.join(SCORE_COLUMNS)}) VALUES ({','.join('?' for _ in SCORE_COLUMNS)})",
+                tuple(data[column] for column in SCORE_COLUMNS),
+            )
+            imported += 1
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise HTTPException(500, "OCR結果の保存に失敗しました。データは保存されていません")
+    finally:
+        connection.close()
+    return {"imported": imported, "duplicates": duplicates}
 
 
 @app.get("/api/reports/excel")

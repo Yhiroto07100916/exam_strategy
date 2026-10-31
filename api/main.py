@@ -175,6 +175,32 @@ def add_score(item: Score):
     return data
 
 
+@app.put("/api/scores/{item_id}")
+def update_score(item_id: str, item: Score):
+    data = item.model_dump()
+    connection = db()
+    try:
+        existing = connection.execute(
+            "SELECT created_at FROM scores WHERE id = ?", (item_id,)
+        ).fetchone()
+        if existing is None:
+            raise HTTPException(404, "成績が見つかりません")
+        connection.execute(
+            """UPDATE scores SET date=?, exam_name=?, exam_type=?, subject=?,
+               score=?, max_score=?, deviation=?, rank=?, examinees=?
+               WHERE id=?""",
+            (
+                data["date"], data["exam_name"], data["exam_type"], data["subject"],
+                data["score"], data["max_score"], data["deviation"], data["rank"],
+                data["examinees"], item_id,
+            ),
+        )
+        connection.commit()
+        return {"id": item_id, **data, "created_at": existing["created_at"]}
+    finally:
+        connection.close()
+
+
 @app.delete("/api/scores/{item_id}", status_code=204)
 def delete_score(item_id: str):
     connection = db()
@@ -215,6 +241,28 @@ def add_question(item: Question):
     finally:
         connection.close()
     return data
+
+
+@app.put("/api/questions/{item_id}")
+def update_question(item_id: str, item: Question):
+    data = item.model_dump()
+    data["correct"] = int(data["correct"])
+    connection = db()
+    try:
+        cursor = connection.execute(
+            """UPDATE questions SET date=?, exam_name=?, subject=?, unit=?,
+               correct=?, points=?, earned_points=? WHERE id=?""",
+            (
+                data["date"], data["exam_name"], data["subject"], data["unit"],
+                data["correct"], data["points"], data["earned_points"], item_id,
+            ),
+        )
+        if not cursor.rowcount:
+            raise HTTPException(404, "問題データが見つかりません")
+        connection.commit()
+    finally:
+        connection.close()
+    return {"id": item_id, **data}
 
 
 @app.delete("/api/questions/{item_id}", status_code=204)

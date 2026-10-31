@@ -52,6 +52,30 @@ def test_latest_exam_is_not_mixed_with_other_exam_on_same_date(tmp_path, monkeyp
         assert latest["subjects_count"] == 1
 
 
+def test_latest_exam_is_isolated_by_exam_type_when_name_matches(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        for exam_type, subject, score in [
+            ("模試", "国語", 70),
+            ("定期考査", "数学", 80),
+        ]:
+            response = client.post("/api/scores", json={
+                "date": "2026-10-01",
+                "exam_name": "同名テスト",
+                "exam_type": exam_type,
+                "subject": subject,
+                "score": score,
+                "max_score": 100,
+            })
+            assert response.status_code == 201
+
+        latest = client.get("/api/analysis").json()["latest_exam"]
+        assert latest["name"] == "同名テスト"
+        assert latest["exam_type"] == "定期考査"
+        assert latest["total"] == 80
+        assert latest["max_total"] == 100
+        assert latest["subjects_count"] == 1
+
+
 def test_analysis_uses_correct_fallback_when_point_data_is_incomplete(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         client.post("/api/scores", json={

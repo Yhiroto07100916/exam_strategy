@@ -166,7 +166,8 @@ def test_score_update_and_validation(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         original = {
             "date": "2026-10-01", "exam_name": "10月模試", "exam_type": "模試",
-            "subject": "数学", "score": 72, "max_score": 100, "deviation": 58.4
+            "subject": "数学", "score": 72, "max_score": 100, "deviation": 58.4,
+            "rank": 12, "examinees": 100
         }
         created = client.post("/api/scores", json=original).json()
         item_id = created["id"]
@@ -175,6 +176,8 @@ def test_score_update_and_validation(tmp_path, monkeypatch):
         assert response.status_code == 200
         assert response.json()["exam_name"] == "11月模試"
         assert response.json()["score"] == 81
+        assert response.json()["rank"] == 12
+        assert response.json()["examinees"] == 100
         assert response.json()["id"] == item_id
         assert response.json()["created_at"] == created["created_at"]
         assert client.put(

@@ -23,8 +23,10 @@ uvicorn api.main:app --reload
 - 総合目標点の科目別配分：現在点・満点・学習優先度から科目別目標を計算し、満点に達した科目の余剰分を再配分
 - 目標配分API：`POST /api/targets/allocate`（学校独自の公式配点や合格可能性を推定する機能ではありません）
 - Excel / CSV一括取り込み（行ごとの入力エラー表示、重複検出、DB保存のトランザクション化）
-- PDFテキスト抽出（画像PDFのOCRは未実装）
+- PDFテキスト抽出、ローカルTesseractによる画像PDFのOCR候補抽出・手動確認後の登録（OCR利用には日本語Tesseractデータが必要）
 - Excelレポート出力
 - SQLiteによるローカル保存（`data/exam_strategy.sqlite3`）
+
+画像PDFのOCRを使う場合は、macOSで `brew install tesseract tesseract-lang` を実行し、日本語OCRデータ（jpn）を利用できる状態にしてください。OCR候補は自動保存せず、画面で日付・模試名・科目・得点・満点を確認してから登録します。
 
 既存のCLIスクリプトは保持しています。`data/schools_template.json` は構造例であり、実在校の確定した選抜ルールではありません。学校別配点・合格最低点・合格可能性は年度や方式ごとの公式資料を確認してから扱ってください。

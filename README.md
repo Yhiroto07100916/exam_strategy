@@ -27,4 +27,6 @@ uvicorn api.main:app --reload
 - Excelレポート出力
 - SQLiteによるローカル保存（`data/exam_strategy.sqlite3`）
 
-画像PDFのOCRを使う場合は、macOSで `brew install tesseract tesseract-lang` を実行し、日本語OCRデータ（jpn）を利用できる状態にしてください。OCR候補は自動保存せず、画面で日付・模試名・科目・得点・満点を確認してから登録します。\n\n既存のCLIスクリプトは保持しています。`data/schools_template.json` は構造例であり、実在校の確定した選抜ルールではありません。学校別配点・合格最低点・合格可能性は年度や方式ごとの公式資料を確認してから扱ってください。
+画像PDFのOCRを使う場合は、macOSで `brew install tesseract tesseract-lang` を実行し、日本語OCRデータ（jpn）を利用できる状態にしてください。OCR候補は自動保存せず、画面で日付・模試名・科目・得点・満点を確認してから登録します。
+
+既存のCLIスクリプトは保持しています。`data/schools_template.json` は構造例であり、実在校の確定した選抜ルールではありません。学校別配点・合格最低点・合格可能性は年度や方式ごとの公式資料を確認してから扱ってください。

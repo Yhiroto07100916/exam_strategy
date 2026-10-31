@@ -1,3 +1,6 @@
+import io
+
+import pandas as pd
 from fastapi.testclient import TestClient
 import api.main as api
 
@@ -203,3 +206,65 @@ def test_question_update_and_validation(tmp_path, monkeypatch):
             f"/api/questions/{item_id}", json={**changed, "earned_points": 5}
         ).status_code == 422
         assert client.put("/api/questions/missing", json=changed).status_code == 404
+
+
+def test_csv_import_skips_existing_and_in_file_duplicates(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        csv_data = (
+            "date,exam_name,subject,score,max_score\n"
+            "2026-10-01,10月模試,国語,68,100\n"
+            "2026-10-01,10月模試,国語,68,100\n"
+        )
+        first = client.post(
+            "/api/import/table",
+            files={"file": ("scores.csv", csv_data.encode("utf-8-sig"), "text/csv")},
+        )
+        assert first.status_code == 200
+        assert first.json()["imported"] == 1
+        assert first.json()["duplicates"] == 1
+        assert first.json()["errors"] == []
+
+        second = client.post(
+            "/api/import/table",
+            files={"file": ("scores.csv", csv_data.encode("utf-8-sig"), "text/csv")},
+        )
+        assert second.status_code == 200
+        assert second.json()["imported"] == 0
+        assert second.json()["duplicates"] == 2
+        assert len(client.get("/api/scores").json()) == 1
+
+
+def test_csv_import_keeps_valid_rows_and_reports_invalid_rows(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        csv_data = (
+            "date,exam_name,subject,score,max_score\n"
+            "2026-10-01,10月模試,国語,68,100\n"
+            "2026-10-01,10月模試,音楽,80,100\n"
+        )
+        response = client.post(
+            "/api/import/table",
+            files={"file": ("scores.csv", csv_data.encode("utf-8-sig"), "text/csv")},
+        )
+        assert response.status_code == 200
+        assert response.json()["imported"] == 1
+        assert response.json()["duplicates"] == 0
+        assert len(response.json()["errors"]) == 1
+        assert len(client.get("/api/scores").json()) == 1
+
+
+def test_xlsx_import(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        output = io.BytesIO()
+        pd.DataFrame([{
+            "date": "2026-10-01", "exam_name": "Excel模試",
+            "subject": "数学", "score": 74, "max_score": 100
+        }]).to_excel(output, index=False)
+        response = client.post(
+            "/api/import/table",
+            files={"file": ("scores.xlsx", output.getvalue(),
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert response.status_code == 200
+        assert response.json()["imported"] == 1
+        assert response.json()["duplicates"] == 0
+        assert response.json()["errors"] == []

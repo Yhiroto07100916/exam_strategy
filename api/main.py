@@ -420,21 +420,33 @@ async def import_table(file: UploadFile = File(...)):
     if not required.issubset(frame.columns):
         raise HTTPException(422, "subject, score, max_score列が必要です")
 
-    imported = 0
     errors = []
+    parsed = []
+    duplicates = 0
     default_name = Path(file.filename or "取り込み").stem or "取り込み"
+
+    def missing(value: Any) -> bool:
+        return value is None or bool(pd.isna(value)) or value == ""
+
+    def optional_number(row: pd.Series, column: str, integer: bool = False):
+        value = row.get(column)
+        if missing(value):
+            return None
+        number = float(value)
+        if integer:
+            if not number.is_integer():
+                raise ValueError(f"{column}は整数で入力してください")
+            return int(number)
+        return number
+
     for index, row in frame.iterrows():
         try:
-            def optional_number(column: str):
-                value = row.get(column)
-                return None if pd.isna(value) or value == "" else float(value)
-
             date_value = row.get("date")
-            date_text = date.today().isoformat() if pd.isna(date_value) else str(date_value)[:10]
+            date_text = date.today().isoformat() if missing(date_value) else str(date_value)[:10]
             exam_value = row.get("exam_name")
-            exam_name = default_name if pd.isna(exam_value) or not str(exam_value).strip() else str(exam_value).strip()
+            exam_name = default_name if missing(exam_value) or not str(exam_value).strip() else str(exam_value).strip()
             exam_type_value = row.get("exam_type")
-            exam_type = "模試" if pd.isna(exam_type_value) or not str(exam_type_value).strip() else str(exam_type_value).strip()
+            exam_type = "模試" if missing(exam_type_value) or not str(exam_type_value).strip() else str(exam_type_value).strip()
             payload = Score(
                 date=date_text,
                 exam_name=exam_name,
@@ -442,15 +454,48 @@ async def import_table(file: UploadFile = File(...)):
                 subject=str(row["subject"]).strip(),
                 score=float(row["score"]),
                 max_score=float(row["max_score"]),
-                deviation=optional_number("deviation"),
-                rank=optional_number("rank"),
-                examinees=optional_number("examinees"),
+                deviation=optional_number(row, "deviation"),
+                rank=optional_number(row, "rank", integer=True),
+                examinees=optional_number(row, "examinees", integer=True),
             )
-            add_score(payload)
-            imported += 1
+            parsed.append(payload.model_dump())
         except Exception as error:
             errors.append({"row": int(index) + 2, "error": str(error)})
-    return {"imported": imported, "errors": errors}
+
+    connection = db()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        existing_rows = connection.execute(
+            "SELECT date, exam_name, exam_type, subject FROM scores"
+        ).fetchall()
+        existing_keys = {
+            (row["date"], row["exam_name"], row["exam_type"], row["subject"])
+            for row in existing_rows
+        }
+        accepted = []
+        for data in parsed:
+            key = (data["date"], data["exam_name"], data["exam_type"], data["subject"])
+            if key in existing_keys:
+                duplicates += 1
+                continue
+            existing_keys.add(key)
+            data["id"] = str(uuid.uuid4())
+            data["created_at"] = datetime.now(timezone.utc).isoformat()
+            accepted.append(data)
+
+        for data in accepted:
+            connection.execute(
+                f"INSERT INTO scores ({','.join(SCORE_COLUMNS)}) VALUES ({','.join('?' for _ in SCORE_COLUMNS)})",
+                tuple(data[key] for key in SCORE_COLUMNS),
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise HTTPException(500, "取り込み中にエラーが発生したため、データは保存されていません")
+    finally:
+        connection.close()
+
+    return {"imported": len(accepted), "duplicates": duplicates, "errors": errors}
 
 
 @app.post("/api/import/pdf")

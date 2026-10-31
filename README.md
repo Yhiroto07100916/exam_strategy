@@ -22,7 +22,7 @@ uvicorn api.main:app --reload
 - 志望校・目標：科目別目標点と出典メモの保存
 - 総合目標点の科目別配分：現在点・満点・学習優先度から科目別目標を計算し、満点に達した科目の余剰分を再配分
 - 目標配分API：`POST /api/targets/allocate`（学校独自の公式配点や合格可能性を推定する機能ではありません）
-- Excel / CSV一括取り込み
+- Excel / CSV一括取り込み（行ごとの入力エラー表示、重複検出、DB保存のトランザクション化）
 - PDFテキスト抽出（画像PDFのOCRは未実装）
 - Excelレポート出力
 - SQLiteによるローカル保存（`data/exam_strategy.sqlite3`）

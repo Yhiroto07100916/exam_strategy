@@ -338,3 +338,15 @@ def test_school_rule_requires_https_source_url(tmp_path, monkeypatch):
             "official_source_url": "http://example.com/rule",
         })
         assert response.status_code == 422
+
+
+def test_official_school_source_directory():
+    from fastapi.testclient import TestClient
+    with TestClient(api.app) as client:
+        response = client.get("/api/schools/official-sources")
+        assert response.status_code == 200
+        result = response.json()
+        assert result["admission_year"] == 2027
+        assert {item["prefecture"] for item in result["official_sources"]} == {
+            "東京都", "神奈川県", "埼玉県", "千葉県"
+        }

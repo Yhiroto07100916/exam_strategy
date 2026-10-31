@@ -1,0 +1,14 @@
+{
+  "school_name": "志望校名",
+  "prefecture": "",
+  "admission_year": 2027,
+  "subjects": {
+    "国語": {"target_score": null, "max_score": 100, "weight": 1.0},
+    "数学": {"target_score": null, "max_score": 100, "weight": 1.0},
+    "英語": {"target_score": null, "max_score": 100, "weight": 1.0},
+    "理科": {"target_score": null, "max_score": 100, "weight": 1.0},
+    "社会": {"target_score": null, "max_score": 100, "weight": 1.0}
+  },
+  "total_target": null,
+  "source_note": "目標点・配点の出典と確認日を記録"
+}

@@ -1,0 +1,11 @@
+{
+  "student_name": "",
+  "admission_year": 2027,
+  "scores": {
+    "exam_total": null,
+    "report_total": null,
+    "private_exam_total": null,
+    "private_report_points": null
+  },
+  "notes": "入力キーは各学校のscoring_rule.components.input_keyと一致させてください。"
+}

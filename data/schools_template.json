@@ -1,0 +1,71 @@
+{
+  "admission_year": 2027,
+  "scope": [
+    "東京都",
+    "神奈川県",
+    "埼玉県",
+    "千葉県"
+  ],
+  "schools": [
+    {
+      "school_name": "学校名を入力",
+      "prefecture": "東京都",
+      "school_type": "公立",
+      "selection_type": "一般選抜",
+      "course": "学科・コース名",
+      "verification_status": "未確認",
+      "verified_on": null,
+      "official_source_url": "",
+      "scoring_rule": {
+        "components": [
+          {
+            "label": "学力検査",
+            "input_key": "exam_total",
+            "max_score": 500,
+            "weight": 700,
+            "required": true
+          },
+          {
+            "label": "調査書",
+            "input_key": "report_total",
+            "max_score": 65,
+            "weight": 300,
+            "required": true
+          }
+        ],
+        "target_total": null
+      },
+      "notes": "上記は入力例の構造を示す仮設定です。実際の学校の公式選抜資料で必ず置き換えてください。"
+    },
+    {
+      "school_name": "私立校名を入力",
+      "prefecture": "神奈川県",
+      "school_type": "私立",
+      "selection_type": "一般入試",
+      "course": "コース名",
+      "verification_status": "未確認",
+      "verified_on": null,
+      "official_source_url": "",
+      "scoring_rule": {
+        "components": [
+          {
+            "label": "筆記試験",
+            "input_key": "private_exam_total",
+            "max_score": 300,
+            "weight": 300,
+            "required": true
+          },
+          {
+            "label": "内申・加点等",
+            "input_key": "private_report_points",
+            "max_score": 100,
+            "weight": 100,
+            "required": false
+          }
+        ],
+        "target_total": null
+      },
+      "notes": "私立の科目・配点・内申基準・加点・併願優遇等は学校と方式ごとに異なります。仮の構造例です。"
+    }
+  ]
+}

@@ -426,7 +426,7 @@ async def import_table(file: UploadFile = File(...)):
     default_name = Path(file.filename or "取り込み").stem or "取り込み"
 
     def missing(value: Any) -> bool:
-        return value is None or (isinstance(value, float) and math.isnan(value)) or value == ""
+        return value is None or bool(pd.isna(value)) or value == ""
 
     def optional_number(row: pd.Series, column: str, integer: bool = False):
         value = row.get(column)

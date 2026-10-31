@@ -160,3 +160,43 @@ def test_target_allocation_respects_subject_maximum_and_validation(tmp_path, mon
             ],
         })
         assert duplicate.status_code == 422
+
+
+def test_score_update_and_validation(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        original = {
+            "date": "2026-10-01", "exam_name": "10月模試", "exam_type": "模試",
+            "subject": "数学", "score": 72, "max_score": 100, "deviation": 58.4
+        }
+        created = client.post("/api/scores", json=original).json()
+        item_id = created["id"]
+        changed = {**original, "exam_name": "11月模試", "score": 81, "subject": "英語"}
+        response = client.put(f"/api/scores/{item_id}", json=changed)
+        assert response.status_code == 200
+        assert response.json()["exam_name"] == "11月模試"
+        assert response.json()["score"] == 81
+        assert response.json()["id"] == item_id
+        assert response.json()["created_at"] == created["created_at"]
+        assert client.put(
+            f"/api/scores/{item_id}", json={**changed, "score": 101}
+        ).status_code == 422
+        assert client.put("/api/scores/missing", json=changed).status_code == 404
+
+
+def test_question_update_and_validation(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        original = {
+            "date": "2026-10-01", "exam_name": "10月模試", "subject": "英語",
+            "unit": "関係代名詞", "correct": False, "points": 4, "earned_points": 0
+        }
+        created = client.post("/api/questions", json=original).json()
+        item_id = created["id"]
+        changed = {**original, "unit": "仮定法", "correct": True, "earned_points": 4}
+        response = client.put(f"/api/questions/{item_id}", json=changed)
+        assert response.status_code == 200
+        assert response.json()["unit"] == "仮定法"
+        assert response.json()["correct"] == 1
+        assert client.put(
+            f"/api/questions/{item_id}", json={**changed, "earned_points": 5}
+        ).status_code == 422
+        assert client.put("/api/questions/missing", json=changed).status_code == 404

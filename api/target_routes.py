@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 

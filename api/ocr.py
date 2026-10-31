@@ -59,9 +59,13 @@ def preview_pdf_ocr(content: bytes) -> dict[str, Any]:
         raise RuntimeError(
             "Tesseractが見つかりません。macOSでは brew install tesseract tesseract-lang を実行してください。"
         )
-    languages = subprocess.run(
-        [binary, "--list-langs"], capture_output=True, text=True, check=False
-    )
+    try:
+        languages = subprocess.run(
+            [binary, "--list-langs"], capture_output=True, text=True,
+            check=False, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError("Tesseractを起動できませんでした") from error
     if "jpn" not in (languages.stdout + languages.stderr):
         raise RuntimeError(
             "日本語OCRデータがありません。brew install tesseract-lang を確認してください。"
@@ -73,9 +77,13 @@ def preview_pdf_ocr(content: bytes) -> dict[str, Any]:
             raise ValueError("OCRできるPDFは20ページまでです")
         texts = []
         for page in document:
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            bounds = page.rect
+            scale = min(2.0, 5000 / max(bounds.width, bounds.height))
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
             image = Image.frombytes("RGB", [pixmap.width, pixmap.height], pixmap.samples)
-            texts.append(pytesseract.image_to_string(image, lang="jpn+eng"))
+            texts.append(
+                pytesseract.image_to_string(image, lang="jpn+eng", timeout=30)
+            )
         document.close()
     except ValueError:
         raise

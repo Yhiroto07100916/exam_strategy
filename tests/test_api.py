@@ -268,3 +268,73 @@ def test_xlsx_import(tmp_path, monkeypatch):
         assert response.json()["imported"] == 1
         assert response.json()["duplicates"] == 0
         assert response.json()["errors"] == []
+
+
+def test_school_and_admission_rule_crud_with_source_validation(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        assert client.get("/api/schools").json() == []
+
+        school_payload = {
+            "name": "都立サンプル高校",
+            "prefecture": "東京都",
+            "school_type": "公立",
+        }
+        created = client.post("/api/schools", json=school_payload)
+        assert created.status_code == 201
+        school_id = created.json()["id"]
+        assert client.post("/api/schools", json=school_payload).status_code == 409
+
+        unverified = {
+            "admission_year": 2027,
+            "course": "普通科",
+            "selection_type": "一般選抜",
+            "verification_status": "未確認",
+            "rule_data": {},
+            "notes": "公式資料を確認するまで得点計算に使わない",
+        }
+        rule = client.post(f"/api/schools/{school_id}/rules", json=unverified)
+        assert rule.status_code == 201
+        rule_id = rule.json()["id"]
+
+        invalid_verified = {
+            **unverified,
+            "verification_status": "確認済み",
+            "rule_data": {"exam_weight": 1},
+        }
+        assert client.post(
+            f"/api/schools/{school_id}/rules", json=invalid_verified
+        ).status_code == 422
+
+        verified = {
+            **unverified,
+            "verification_status": "確認済み",
+            "official_source_url": "https://www.example.metro.tokyo.jp/admission",
+            "verified_on": "2026-10-31",
+            "rule_data": {
+                "components": [
+                    {"label": "学力検査", "weight": 1, "source_page": 12}
+                ]
+            },
+        }
+        updated = client.put(f"/api/school-rules/{rule_id}", json=verified)
+        assert updated.status_code == 200
+        assert updated.json()["verification_status"] == "確認済み"
+
+        listed = client.get("/api/schools").json()
+        assert listed[0]["rules"][0]["rule_data"]["components"][0]["source_page"] == 12
+        assert client.delete(f"/api/schools/{school_id}").status_code == 204
+        assert client.get("/api/schools").json() == []
+
+
+def test_school_rule_requires_https_source_url(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        school = client.post("/api/schools", json={
+            "name": "私立サンプル高校", "prefecture": "神奈川県", "school_type": "私立"
+        }).json()
+        response = client.post(f"/api/schools/{school['id']}/rules", json={
+            "admission_year": 2027,
+            "selection_type": "一般入試",
+            "verification_status": "未確認",
+            "official_source_url": "http://example.com/rule",
+        })
+        assert response.status_code == 422

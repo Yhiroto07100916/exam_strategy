@@ -106,3 +106,57 @@ def test_question_delete(tmp_path, monkeypatch):
         }).json()
         assert client.delete("/api/questions/" + item["id"]).status_code == 204
         assert client.delete("/api/questions/" + item["id"]).status_code == 404
+
+
+def test_weighted_subject_target_allocation(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/targets/allocate", json={
+            "target_total": 160,
+            "subjects": [
+                {"subject": "数学", "current_score": 60, "max_score": 100, "weight": 2},
+                {"subject": "英語", "current_score": 70, "max_score": 100, "weight": 1},
+            ],
+        })
+        assert response.status_code == 200
+        result = response.json()
+        assert result["current_total"] == 130
+        assert result["planned_total"] == 160
+        targets = {item["subject"]: item for item in result["subjects"]}
+        assert targets["数学"]["target_score"] == 80
+        assert targets["英語"]["target_score"] == 80
+        assert targets["数学"]["increase"] == 20
+        assert targets["英語"]["increase"] == 10
+        assert "合格可能性" in result["notice"]
+
+
+def test_target_allocation_respects_subject_maximum_and_validation(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        capped = client.post("/api/targets/allocate", json={
+            "target_total": 160,
+            "subjects": [
+                {"subject": "数学", "current_score": 95, "max_score": 100, "weight": 2},
+                {"subject": "英語", "current_score": 50, "max_score": 100, "weight": 1},
+            ],
+        })
+        assert capped.status_code == 200
+        targets = {item["subject"]: item for item in capped.json()["subjects"]}
+        assert targets["数学"]["target_score"] == 100
+        assert targets["英語"]["target_score"] == 60
+
+        too_high = client.post("/api/targets/allocate", json={
+            "target_total": 201,
+            "subjects": [
+                {"subject": "数学", "current_score": 50, "max_score": 100},
+                {"subject": "英語", "current_score": 50, "max_score": 100},
+            ],
+        })
+        assert too_high.status_code == 422
+
+        duplicate = client.post("/api/targets/allocate", json={
+            "target_total": 100,
+            "subjects": [
+                {"subject": "数学", "current_score": 50, "max_score": 100},
+                {"subject": "数学", "current_score": 50, "max_score": 100},
+            ],
+        })
+        assert duplicate.status_code == 422

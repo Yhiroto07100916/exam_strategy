@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import math
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -68,11 +69,18 @@ class SubjectCurrentScore(BaseModel):
 
 
 class SchoolTargetAllocationRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     target_total: float = Field(ge=0, allow_inf_nan=False)
     subjects: list[SubjectCurrentScore] = Field(min_length=1, max_length=5)
     fixed_component_scores: dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("fixed_component_scores")
+    @classmethod
+    def validate_fixed_scores(cls, value: dict[str, float]) -> dict[str, float]:
+        if any(not math.isfinite(score) or score < 0 for score in value.values()):
+            raise ValueError("固定評価項目の得点は0以上の有限値で入力してください")
+        return value
 
     @model_validator(mode="after")
     def validate_subjects(self):

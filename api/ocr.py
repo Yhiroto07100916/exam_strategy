@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
-from io import BytesIO
 from typing import Any
 
 import fitz
@@ -72,7 +71,7 @@ def preview_pdf_ocr(content: bytes) -> dict[str, Any]:
         )
 
     try:
-        document = fitz.open(stream=BytesIO(content), filetype="pdf")
+        document = fitz.open(stream=content, filetype="pdf")
         if len(document) > MAX_PDF_PAGES:
             raise ValueError("OCRできるPDFは20ページまでです")
         texts = []

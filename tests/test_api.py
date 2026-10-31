@@ -211,9 +211,9 @@ def test_question_update_and_validation(tmp_path, monkeypatch):
 def test_csv_import_skips_existing_and_in_file_duplicates(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         csv_data = (
-            "date,exam_name,subject,score,max_score\\n"
-            "2026-10-01,10月模試,国語,68,100\\n"
-            "2026-10-01,10月模試,国語,68,100\\n"
+            "date,exam_name,subject,score,max_score\n"
+            "2026-10-01,10月模試,国語,68,100\n"
+            "2026-10-01,10月模試,国語,68,100\n"
         )
         first = client.post(
             "/api/import/table",
@@ -237,9 +237,9 @@ def test_csv_import_skips_existing_and_in_file_duplicates(tmp_path, monkeypatch)
 def test_csv_import_keeps_valid_rows_and_reports_invalid_rows(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         csv_data = (
-            "date,exam_name,subject,score,max_score\\n"
-            "2026-10-01,10月模試,国語,68,100\\n"
-            "2026-10-01,10月模試,音楽,80,100\\n"
+            "date,exam_name,subject,score,max_score\n"
+            "2026-10-01,10月模試,国語,68,100\n"
+            "2026-10-01,10月模試,音楽,80,100\n"
         )
         response = client.post(
             "/api/import/table",

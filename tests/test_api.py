@@ -397,6 +397,24 @@ def test_school_and_admission_rule_crud_with_source_validation(tmp_path, monkeyp
         )
         assert impossible.status_code == 422
 
+        partial = client.post(
+            f"/api/schools/{school_id}/rules/{rule_id}/allocate",
+            json={
+                "target_total": 550,
+                "subjects": [
+                    {"subject": "数学", "current_score": 60},
+                    {"subject": "英語", "current_score": 70},
+                ],
+                "fixed_component_scores": {"調査書": 80},
+                "alternative_fixed_component_scores": {
+                    "10:0方式": {"調査書": 0}
+                },
+            },
+        )
+        assert partial.status_code == 200
+        assert partial.json()["method_results"][0]["planned_total"] == 550
+        assert "error" in partial.json()["method_results"][1]
+
         listed = client.get("/api/schools").json()
         assert listed[0]["rules"][0]["rule_data"]["scoring_model"]["exam_subjects"][0]["source_page"] == 12
         assert client.delete(f"/api/schools/{school_id}").status_code == 204
@@ -448,6 +466,39 @@ def test_verified_school_rule_requires_source_cited_scoring_model(tmp_path, monk
                          "contribution_max_score": 100}
                     ],
                     "fixed_components": [],
+                }
+            },
+        })
+        assert response.status_code == 422
+
+
+def test_school_scoring_alternatives_require_comparable_total_maxima(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        school = client.post("/api/schools", json={
+            "name": "複数方式高校", "prefecture": "東京都", "school_type": "公立"
+        }).json()
+        response = client.post(f"/api/schools/{school['id']}/rules", json={
+            "admission_year": 2027,
+            "selection_type": "一般選抜",
+            "verification_status": "確認済み",
+            "official_source_url": "https://www.example.metro.tokyo.jp/rule",
+            "verified_on": "2026-10-31",
+            "rule_data": {
+                "scoring_model": {
+                    "model_version": "weighted_components_v1",
+                    "exam_subjects": [
+                        {"subject": "数学", "raw_max_score": 100,
+                         "contribution_max_score": 100, "source_page": 1}
+                    ],
+                    "fixed_components": [],
+                    "alternatives": [{
+                        "label": "別方式",
+                        "exam_subjects": [
+                            {"subject": "数学", "raw_max_score": 100,
+                             "contribution_max_score": 90, "source_page": 2}
+                        ],
+                        "fixed_components": [],
+                    }],
                 }
             },
         })

@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -37,6 +37,7 @@ def db() -> sqlite3.Connection:
     DATA.mkdir(exist_ok=True)
     connection = sqlite3.connect(DB)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("""
         CREATE TABLE IF NOT EXISTS scores (
             id TEXT PRIMARY KEY, date TEXT NOT NULL, exam_name TEXT NOT NULL,
@@ -55,6 +56,34 @@ def db() -> sqlite3.Connection:
     connection.execute(
         "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
     )
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS schools (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            prefecture TEXT NOT NULL,
+            school_type TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(prefecture, name)
+        )
+    """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS school_rules (
+            id TEXT PRIMARY KEY,
+            school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+            admission_year INTEGER NOT NULL,
+            course TEXT NOT NULL,
+            selection_type TEXT NOT NULL,
+            verification_status TEXT NOT NULL,
+            official_source_url TEXT,
+            verified_on TEXT,
+            rule_data TEXT NOT NULL,
+            notes TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(school_id, admission_year, course, selection_type)
+        )
+    """)
     connection.commit()
     return connection
 
@@ -138,6 +167,43 @@ class Settings(BaseModel):
 
 class OCRConfirmRequest(BaseModel):
     scores: list[Score] = Field(min_length=1, max_length=100)
+
+
+
+class SchoolCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    prefecture: Literal["東京都", "神奈川県", "埼玉県", "千葉県"]
+    school_type: Literal["公立", "私立"]
+
+
+class SchoolRuleInput(BaseModel):
+    admission_year: int = Field(ge=2025, le=2100)
+    course: str = Field(default="", max_length=120)
+    selection_type: str = Field(min_length=1, max_length=120)
+    verification_status: Literal["未確認", "確認済み", "要再確認"] = "未確認"
+    official_source_url: str | None = Field(default=None, max_length=2048)
+    verified_on: str | None = None
+    rule_data: dict[str, Any] = Field(default_factory=dict)
+    notes: str = Field(default="", max_length=2000)
+
+    @field_validator("official_source_url")
+    @classmethod
+    def validate_source_url(cls, value: str | None) -> str | None:
+        if value and not value.startswith("https://"):
+            raise ValueError("公式資料URLはhttps://で入力してください")
+        return value
+
+    @field_validator("verified_on")
+    @classmethod
+    def validate_verified_date(cls, value: str | None) -> str | None:
+        return parse_date(value) if value else value
+
+    @model_validator(mode="after")
+    def validate_verification(self):
+        if self.verification_status == "確認済み":
+            if not self.official_source_url or not self.verified_on or not self.rule_data:
+                raise ValueError("確認済みには公式資料URL・確認日・確認した選抜データが必要です")
+        return self
 
 
 

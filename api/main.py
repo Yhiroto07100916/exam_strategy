@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pypdf import PdfReader
 
-from .ocr import preview_pdf_ocr
+from .ocr import MAX_PDF_BYTES, preview_pdf_ocr
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
@@ -530,7 +530,7 @@ async def preview_pdf_ocr_endpoint(file: UploadFile = File(...)):
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(415, "PDFファイルを選択してください")
     try:
-        return preview_pdf_ocr(await file.read())
+        return preview_pdf_ocr(await file.read(MAX_PDF_BYTES + 1))
     except RuntimeError as error:
         raise HTTPException(503, str(error))
     except ValueError as error:

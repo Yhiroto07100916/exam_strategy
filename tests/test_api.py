@@ -331,6 +331,18 @@ def test_school_and_admission_rule_crud_with_source_validation(tmp_path, monkeyp
                     ],
                     "fixed_components": [
                         {"name": "調査書", "max_score": 100, "source_page": 13}
+                    ],
+                    "alternatives": [
+                        {
+                            "label": "10:0方式",
+                            "exam_subjects": [
+                                {"subject": "数学", "raw_max_score": 100, "contribution_max_score": 200, "source_page": 14},
+                                {"subject": "英語", "raw_max_score": 100, "contribution_max_score": 300, "source_page": 14}
+                            ],
+                            "fixed_components": [
+                                {"name": "調査書", "max_score": 100, "source_page": 14}
+                            ]
+                        }
                     ]
                 }
             },
@@ -348,14 +360,25 @@ def test_school_and_admission_rule_crud_with_source_validation(tmp_path, monkeyp
                     {"subject": "英語", "current_score": 70, "priority": 1},
                 ],
                 "fixed_component_scores": {"調査書": 80},
+                "alternative_fixed_component_scores": {
+                    "10:0方式": {"調査書": 80}
+                },
             },
         )
         assert allocation.status_code == 200
         result = allocation.json()
-        assert result["current_total"] == 400
+        assert result["current_total"] == 410
+        assert result["best_current_method"] == "10:0方式"
         assert result["planned_total"] == 470
-        assert result["subjects"][0]["target_score"] == 71.67
-        assert result["subjects"][1]["target_score"] == 87.5
+        assert len(result["method_results"]) == 2
+        primary_result, alternative_result = result["method_results"]
+        assert primary_result["current_total"] == 400
+        assert primary_result["planned_total"] == 470
+        assert primary_result["subjects"][0]["target_score"] == 71.67
+        assert primary_result["subjects"][1]["target_score"] == 87.5
+        assert alternative_result["current_total"] == 410
+        assert alternative_result["planned_total"] == 470
+        assert alternative_result["method_label"] == "10:0方式"
         assert result["fixed_components"][0]["score"] == 80
 
         impossible = client.post(
@@ -367,6 +390,9 @@ def test_school_and_admission_rule_crud_with_source_validation(tmp_path, monkeyp
                     {"subject": "英語", "current_score": 70},
                 ],
                 "fixed_component_scores": {"調査書": 80},
+                "alternative_fixed_component_scores": {
+                    "10:0方式": {"調査書": 80}
+                },
             },
         )
         assert impossible.status_code == 422

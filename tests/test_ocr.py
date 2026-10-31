@@ -1,4 +1,3 @@
-import io
 from types import SimpleNamespace
 
 import fitz

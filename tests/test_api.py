@@ -1,3 +1,6 @@
+import io
+
+import pandas as pd
 from fastapi.testclient import TestClient
 import api.main as api
 
@@ -247,3 +250,21 @@ def test_csv_import_keeps_valid_rows_and_reports_invalid_rows(tmp_path, monkeypa
         assert response.json()["duplicates"] == 0
         assert len(response.json()["errors"]) == 1
         assert len(client.get("/api/scores").json()) == 1
+
+
+def test_xlsx_import(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        output = io.BytesIO()
+        pd.DataFrame([{
+            "date": "2026-10-01", "exam_name": "Excel模試",
+            "subject": "数学", "score": 74, "max_score": 100
+        }]).to_excel(output, index=False)
+        response = client.post(
+            "/api/import/table",
+            files={"file": ("scores.xlsx", output.getvalue(),
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert response.status_code == 200
+        assert response.json()["imported"] == 1
+        assert response.json()["duplicates"] == 0
+        assert response.json()["errors"] == []

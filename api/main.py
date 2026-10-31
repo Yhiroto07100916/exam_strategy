@@ -20,13 +20,15 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 WEB = ROOT / "web"
 DB = DATA / "exam_strategy.sqlite3"
-SUBJECTS = ["国語", "数学", "英語", "理科", "社会"]
+from .main_models import SUBJECTS
+from .target_routes import router as target_router
 SCORE_COLUMNS = [
     "id", "date", "exam_name", "exam_type", "subject", "score",
     "max_score", "deviation", "rank", "examinees", "created_at",
 ]
 
-app = FastAPI(title="Exam Strategy API", version="1.1.0")
+app = FastAPI(title="Exam Strategy API", version="1.2.0")
+app.include_router(target_router)
 
 
 def db() -> sqlite3.Connection:

@@ -270,11 +270,22 @@ def allocate_school_targets(
             request.alternative_fixed_component_scores.get(alternative.label, {}),
         ))
 
-    results = [
-        _allocate_one_method(label, exam_rules, fixed_rules, request, fixed_scores)
-        for label, exam_rules, fixed_rules, fixed_scores in methods
-    ]
-    best = max(results, key=lambda item: item["current_total"])
+    results = []
+    successful_results = []
+    for label, exam_rules, fixed_rules, fixed_scores in methods:
+        try:
+            result = _allocate_one_method(label, exam_rules, fixed_rules, request, fixed_scores)
+            results.append(result)
+            successful_results.append(result)
+        except ValueError as error:
+            results.append({
+                "method_label": label,
+                "requested_total": round(request.target_total, 2),
+                "error": str(error),
+            })
+    if not successful_results:
+        raise ValueError("登録された全ての選抜方式で計算できません。各方式の入力値と目標点を確認してください")
+    best = max(successful_results, key=lambda item: item["current_total"])
     best_current_method = best["method_label"]
     return {
         **best,

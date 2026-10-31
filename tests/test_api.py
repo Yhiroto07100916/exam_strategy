@@ -88,7 +88,7 @@ def test_question_validation_and_excel_report(tmp_path, monkeypatch):
 
 def test_csv_import(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
-        csv_data = 'date,exam_name,subject,score,max_score\\n2026-10-01,10月模試,国語,68,100\\n'
+        csv_data = 'date,exam_name,subject,score,max_score\n2026-10-01,10月模試,国語,68,100\n'
         response = client.post(
             '/api/import/table',
             files={'file': ('scores.csv', csv_data.encode('utf-8-sig'), 'text/csv')}

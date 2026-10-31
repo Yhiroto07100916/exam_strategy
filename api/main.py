@@ -171,12 +171,16 @@ class OCRConfirmRequest(BaseModel):
 
 
 class SchoolCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     name: str = Field(min_length=1, max_length=120)
     prefecture: Literal["東京都", "神奈川県", "埼玉県", "千葉県"]
     school_type: Literal["公立", "私立"]
 
 
 class SchoolRuleInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     admission_year: int = Field(ge=2025, le=2100)
     course: str = Field(default="", max_length=120)
     selection_type: str = Field(min_length=1, max_length=120)

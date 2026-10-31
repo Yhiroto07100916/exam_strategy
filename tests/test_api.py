@@ -295,6 +295,18 @@ def test_school_and_admission_rule_crud_with_source_validation(tmp_path, monkeyp
         rule = client.post(f"/api/schools/{school_id}/rules", json=unverified)
         assert rule.status_code == 201
         rule_id = rule.json()["id"]
+        unverified_calc = client.post(
+            f"/api/schools/{school_id}/rules/{rule_id}/allocate",
+            json={
+                "target_total": 470,
+                "subjects": [
+                    {"subject": "数学", "current_score": 60},
+                    {"subject": "英語", "current_score": 70},
+                ],
+                "fixed_component_scores": {"調査書": 80},
+            },
+        )
+        assert unverified_calc.status_code == 409
 
         invalid_verified = {
             **unverified,
@@ -311,17 +323,56 @@ def test_school_and_admission_rule_crud_with_source_validation(tmp_path, monkeyp
             "official_source_url": "https://www.example.metro.tokyo.jp/admission",
             "verified_on": "2026-10-31",
             "rule_data": {
-                "components": [
-                    {"label": "学力検査", "weight": 1, "source_page": 12}
-                ]
+                "scoring_model": {
+                    "model_version": "weighted_components_v1",
+                    "exam_subjects": [
+                        {"subject": "数学", "raw_max_score": 100, "contribution_max_score": 300, "source_page": 12},
+                        {"subject": "英語", "raw_max_score": 100, "contribution_max_score": 200, "source_page": 12}
+                    ],
+                    "fixed_components": [
+                        {"name": "調査書", "max_score": 100, "source_page": 13}
+                    ]
+                }
             },
         }
         updated = client.put(f"/api/school-rules/{rule_id}", json=verified)
         assert updated.status_code == 200
         assert updated.json()["verification_status"] == "確認済み"
 
+        allocation = client.post(
+            f"/api/schools/{school_id}/rules/{rule_id}/allocate",
+            json={
+                "target_total": 470,
+                "subjects": [
+                    {"subject": "数学", "current_score": 60, "priority": 1},
+                    {"subject": "英語", "current_score": 70, "priority": 1},
+                ],
+                "fixed_component_scores": {"調査書": 80},
+            },
+        )
+        assert allocation.status_code == 200
+        result = allocation.json()
+        assert result["current_total"] == 400
+        assert result["planned_total"] == 470
+        assert result["subjects"][0]["target_score"] == 71.67
+        assert result["subjects"][1]["target_score"] == 87.5
+        assert result["fixed_components"][0]["score"] == 80
+
+        impossible = client.post(
+            f"/api/schools/{school_id}/rules/{rule_id}/allocate",
+            json={
+                "target_total": 581,
+                "subjects": [
+                    {"subject": "数学", "current_score": 60},
+                    {"subject": "英語", "current_score": 70},
+                ],
+                "fixed_component_scores": {"調査書": 80},
+            },
+        )
+        assert impossible.status_code == 422
+
         listed = client.get("/api/schools").json()
-        assert listed[0]["rules"][0]["rule_data"]["components"][0]["source_page"] == 12
+        assert listed[0]["rules"][0]["rule_data"]["scoring_model"]["exam_subjects"][0]["source_page"] == 12
         assert client.delete(f"/api/schools/{school_id}").status_code == 204
         assert client.get("/api/schools").json() == []
 
@@ -350,3 +401,28 @@ def test_official_school_source_directory():
         assert {item["prefecture"] for item in result["official_sources"]} == {
             "東京都", "神奈川県", "埼玉県", "千葉県"
         }
+
+
+def test_verified_school_rule_requires_source_cited_scoring_model(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        school = client.post("/api/schools", json={
+            "name": "配点検証高校", "prefecture": "東京都", "school_type": "公立"
+        }).json()
+        response = client.post(f"/api/schools/{school['id']}/rules", json={
+            "admission_year": 2027,
+            "selection_type": "一般選抜",
+            "verification_status": "確認済み",
+            "official_source_url": "https://www.example.metro.tokyo.jp/rule",
+            "verified_on": "2026-10-31",
+            "rule_data": {
+                "scoring_model": {
+                    "model_version": "weighted_components_v1",
+                    "exam_subjects": [
+                        {"subject": "数学", "raw_max_score": 100,
+                         "contribution_max_score": 100}
+                    ],
+                    "fixed_components": [],
+                }
+            },
+        })
+        assert response.status_code == 422

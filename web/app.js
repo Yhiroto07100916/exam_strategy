@@ -2,3 +2,13 @@ const $=s=>document.querySelector(s),$=s=>[...document.querySelectorAll(s)],subj
 $('#question-form').onsubmit=async e=>{e.preventDefault();let d=Object.fromEntries(new FormData(e.target));d.correct=d.correct==='true';['points','earned_points'].forEach(k=>d[k]=d[k]===''?null:Number(d[k]));try{await api('/questions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});e.target.reset();await refresh();toast('問題データを保存しました')}catch(x){toast(x.message)}};
 
 $('#question-rows').onclick=async e=>{let id=e.target.dataset.questionId;if(!id)return;if(confirm('この問題データを削除しますか？')){try{await api('/questions/'+id,{method:'DELETE'});await refresh()}catch(x){toast(x.message)}}};
+
+$('#allocation-form').onsubmit=async e=>{
+e.preventDefault();
+const targetTotal=Number(new FormData(e.target).get('target_total'));
+const allocationSubjects=subjects.map(subject=>({subject,current_score:Number($('[data-alloc-current="'+subject+'"]').value),max_score:Number($('[data-alloc-max="'+subject+'"]').value),weight:Number($('[data-alloc-weight="'+subject+'"]').value)}));
+try{
+const result=await api('/targets/allocate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_total:targetTotal,subjects:allocationSubjects})});
+$('#allocation-result').innerHTML='<h3>科目別の目標点</h3><p>現在 '+result.current_total+'点 → 計画 '+result.planned_total+'点 / 目標 '+result.requested_total+'点</p><div class="table"><table><thead><tr><th>科目</th><th>現在点</th><th>目標点</th><th>必要な上積み</th><th>目標得点率</th></tr></thead><tbody>'+result.subjects.map(x=>'<tr><td>'+esc(x.subject)+'</td><td>'+x.current_score+'</td><td>'+x.target_score+'</td><td>+'+x.increase+'</td><td>'+x.target_rate+'%</td></tr>').join('')+'</tbody></table></div><p class="note">'+esc(result.notice)+'</p>'+(result.already_at_or_above_goal?'<p>現在点がすでに総合目標点以上です。</p>':'');
+}catch(x){toast(x.message)}
+};

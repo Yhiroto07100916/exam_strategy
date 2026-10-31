@@ -134,7 +134,9 @@ class Question(BaseModel):
 class Settings(BaseModel):
     profile: dict[str, Any] = Field(default_factory=dict)
     target: dict[str, Any] = Field(default_factory=dict)
-\n\nclass OCRConfirmRequest(BaseModel):
+
+
+class OCRConfirmRequest(BaseModel):
     scores: list[Score] = Field(min_length=1, max_length=100)
 
 

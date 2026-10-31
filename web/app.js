@@ -63,7 +63,7 @@ $('#school-allocation-form').onsubmit=async e=>{
 e.preventDefault();if(!activeSchoolAllocation)return;
 const model=activeSchoolAllocation.model;
 const subjects=model.exam_subjects.map(x=>({subject:x.subject,current_score:Number($('[data-school-current="'+x.subject+'"]').value),priority:Number($('[data-school-priority="'+x.subject+'"]').value)}));
-const fixed_component_scores=Object.fromEntries((model.fixed_components||[]).map(x=>[x.name,Number($('[data-school-fixed="'+x.name+'"]').value)]));
+const fixed_component_scores=Object.fromEntries((model.fixed_components||[]).map(x=>[x.name,Number(queryAll('[data-school-fixed]').find(el=>el.dataset.schoolFixed===x.name)?.value)]));
 const target_total=Number(new FormData(e.target).get('target_total'));
 try{
 const result=await api('/schools/'+activeSchoolAllocation.schoolId+'/rules/'+activeSchoolAllocation.ruleId+'/allocate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_total,subjects,fixed_component_scores})});

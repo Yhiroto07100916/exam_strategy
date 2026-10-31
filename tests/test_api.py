@@ -84,3 +84,16 @@ def test_question_validation_and_excel_report(tmp_path, monkeypatch):
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
         assert response.content[:2] == b"PK"
+
+
+def test_csv_import(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        csv_data = 'date,exam_name,subject,score,max_score\\n2026-10-01,10月模試,国語,68,100\\n'
+        response = client.post(
+            '/api/import/table',
+            files={'file': ('scores.csv', csv_data.encode('utf-8-sig'), 'text/csv')}
+        )
+        assert response.status_code == 200
+        assert response.json()['imported'] == 1
+        assert response.json()['errors'] == []
+        assert len(client.get('/api/scores').json()) == 1

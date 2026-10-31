@@ -215,6 +215,17 @@ def add_question(item: Question):
     return data
 
 
+@app.delete("/api/questions/{item_id}", status_code=204)
+def delete_question(item_id: str):
+    connection = db()
+    try:
+        cursor = connection.execute("DELETE FROM questions WHERE id = ?", (item_id,))
+        connection.commit()
+    finally:
+        connection.close()
+    if not cursor.rowcount:
+        raise HTTPException(404, "問題データが見つかりません")
+
 @app.get("/api/settings")
 def get_settings():
     connection = db()

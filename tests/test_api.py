@@ -97,3 +97,12 @@ def test_csv_import(tmp_path, monkeypatch):
         assert response.json()['imported'] == 1
         assert response.json()['errors'] == []
         assert len(client.get('/api/scores').json()) == 1
+
+
+def test_question_delete(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        item = client.post("/api/questions", json={
+            "subject": "英語", "unit": "仮定法", "correct": False
+        }).json()
+        assert client.delete("/api/questions/" + item["id"]).status_code == 204
+        assert client.delete("/api/questions/" + item["id"]).status_code == 404

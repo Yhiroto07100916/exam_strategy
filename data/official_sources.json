@@ -5,39 +5,51 @@
     {
       "prefecture": "東京都",
       "category": "公立",
-      "url": "https://www.kyoiku.metro.tokyo.lg.jp/ja/information/press/2026/09/2026091703",
-      "note": "令和9年度都立高校入学者選抜実施要綱・同細目"
+      "url": "https://www.kyoiku.metro.tokyo.lg.jp/admission/high_school/exam/release20260917_r9yoko",
+      "note": "令和9年度都立高校入学者選抜実施要綱・同細目。実施方法一覧、学科別の資料、推薦選抜関連資料へのリンクを掲載"
     },
     {
       "prefecture": "東京都",
       "category": "私立",
       "url": "https://www.my.metro.tokyo.lg.jp/w/116-20261007-270259347",
-      "note": "令和9年度都内私立高校入学者選抜実施要項。各校詳細は変更の可能性あり"
+      "note": "令和9年度都内私立高校入学者選抜実施要項。学校ごとの募集要項・出願条件は各校の公式資料で再確認"
+    },
+    {
+      "prefecture": "神奈川県",
+      "category": "公立",
+      "url": "https://www.pref.kanagawa.jp/docs/dc4/nyusen/nyusen/senko_kijun.html",
+      "note": "令和9年度公立高校の学校別選考基準・特色検査概要。学力検査教科、選考基準を確認"
     },
     {
       "prefecture": "神奈川県",
       "category": "公立",
       "url": "https://www.pref.kanagawa.jp/docs/dc4/nyusen/nyusen/jishiyoryo.html",
-      "note": "令和9年度公立高校入学者募集・選抜実施要領"
+      "note": "令和9年度公立高校入学者選抜実施要領。手続・選抜区分などの共通ルールを確認"
     },
     {
       "prefecture": "神奈川県",
       "category": "私立",
       "url": "https://www.pref.kanagawa.jp/docs/dc4/nyusen/nyusen/bosyuannai.html",
-      "note": "募集案内に県内私立高校入試概要の案内あり。個別校募集要項で確認"
+      "note": "県内私立高校入学者選抜の概要を含む募集案内。詳細条件は各私立高校の募集要項で確認"
+    },
+    {
+      "prefecture": "埼玉県",
+      "category": "公立",
+      "url": "https://www.pref.saitama.lg.jp/f2208/r9nyuushi-senbatsuzisshinaiyou.html",
+      "note": "令和9年度各公立高校の選抜実施内容（確定版）。学校・学科ごとの選抜内容を確認"
     },
     {
       "prefecture": "埼玉県",
       "category": "公立",
       "url": "https://www.pref.saitama.lg.jp/f2208/nyushi/r9nyushijyoho.html",
-      "note": "令和9年度公立高校入試情報・各校の選抜実施内容"
+      "note": "令和9年度公立高校入試情報。実施要項・選抜要領・学校別選抜実施内容への案内"
     },
     {
       "prefecture": "千葉県",
       "category": "公立",
-      "url": "https://www.pref.chiba.lg.jp/kyouiku/shidou/nyuushi/koukou/r9/index.html",
-      "note": "令和9年度公立高校入学者選抜情報・実施要項"
+      "url": "https://www.pref.chiba.lg.jp/kyouiku/shidou/nyuushi/koukou/r9/",
+      "note": "令和9年度公立高校入学者選抜情報。実施要項、付表、各学校の選抜・評価方法への案内"
     }
   ],
-  "policy": "都県・公私・学校・学科・年度・選抜区分ごとに公式資料を確認。私立校の方式を都県共通の計算式で推定しない。"
+  "policy": "都県・公私・学校・学科・年度・選抜区分ごとに公式資料を確認。学校別の配点・比率・評価方法は該当校の資料を出典付きで記録し、私立校の方式を都県共通の計算式で推定しない。"
 }

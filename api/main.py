@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -37,6 +37,7 @@ def db() -> sqlite3.Connection:
     DATA.mkdir(exist_ok=True)
     connection = sqlite3.connect(DB)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("""
         CREATE TABLE IF NOT EXISTS scores (
             id TEXT PRIMARY KEY, date TEXT NOT NULL, exam_name TEXT NOT NULL,
@@ -55,6 +56,34 @@ def db() -> sqlite3.Connection:
     connection.execute(
         "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
     )
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS schools (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            prefecture TEXT NOT NULL,
+            school_type TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(prefecture, name)
+        )
+    """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS school_rules (
+            id TEXT PRIMARY KEY,
+            school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+            admission_year INTEGER NOT NULL,
+            course TEXT NOT NULL,
+            selection_type TEXT NOT NULL,
+            verification_status TEXT NOT NULL,
+            official_source_url TEXT,
+            verified_on TEXT,
+            rule_data TEXT NOT NULL,
+            notes TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(school_id, admission_year, course, selection_type)
+        )
+    """)
     connection.commit()
     return connection
 
@@ -138,6 +167,47 @@ class Settings(BaseModel):
 
 class OCRConfirmRequest(BaseModel):
     scores: list[Score] = Field(min_length=1, max_length=100)
+
+
+
+class SchoolCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=120)
+    prefecture: Literal["東京都", "神奈川県", "埼玉県", "千葉県"]
+    school_type: Literal["公立", "私立"]
+
+
+class SchoolRuleInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    admission_year: int = Field(ge=2025, le=2100)
+    course: str = Field(default="", max_length=120)
+    selection_type: str = Field(min_length=1, max_length=120)
+    verification_status: Literal["未確認", "確認済み", "要再確認"] = "未確認"
+    official_source_url: str | None = Field(default=None, max_length=2048)
+    verified_on: str | None = None
+    rule_data: dict[str, Any] = Field(default_factory=dict)
+    notes: str = Field(default="", max_length=2000)
+
+    @field_validator("official_source_url")
+    @classmethod
+    def validate_source_url(cls, value: str | None) -> str | None:
+        if value and not value.startswith("https://"):
+            raise ValueError("公式資料URLはhttps://で入力してください")
+        return value
+
+    @field_validator("verified_on")
+    @classmethod
+    def validate_verified_date(cls, value: str | None) -> str | None:
+        return parse_date(value) if value else value
+
+    @model_validator(mode="after")
+    def validate_verification(self):
+        if self.verification_status == "確認済み":
+            if not self.official_source_url or not self.verified_on or not self.rule_data:
+                raise ValueError("確認済みには公式資料URL・確認日・確認した選抜データが必要です")
+        return self
 
 
 
@@ -406,6 +476,152 @@ def analysis():
         "latest_exam": latest_exam,
         "target_gaps": target_gaps,
     }
+
+
+@app.get("/api/schools/official-sources")
+def list_official_sources():
+    path = DATA / "official_sources.json"
+    if not path.exists():
+        return {"admission_year": None, "official_sources": []}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise HTTPException(500, "公式資料一覧を読み込めません")
+
+
+@app.get("/api/schools")
+def list_schools():
+    connection = db()
+    try:
+        school_rows = connection.execute(
+            "SELECT * FROM schools ORDER BY prefecture, name"
+        ).fetchall()
+        result = []
+        for school in school_rows:
+            item = dict(school)
+            rule_rows = connection.execute(
+                """SELECT * FROM school_rules WHERE school_id=?
+                   ORDER BY admission_year DESC, course, selection_type""",
+                (item["id"],),
+            ).fetchall()
+            item["rules"] = []
+            for rule in rule_rows:
+                rule_item = dict(rule)
+                rule_item["rule_data"] = json.loads(rule_item["rule_data"])
+                item["rules"].append(rule_item)
+            result.append(item)
+        return result
+    finally:
+        connection.close()
+
+
+@app.post("/api/schools", status_code=201)
+def create_school(item: SchoolCreate):
+    data = item.model_dump()
+    now = datetime.now(timezone.utc).isoformat()
+    data.update({"id": str(uuid.uuid4()), "created_at": now, "updated_at": now})
+    connection = db()
+    try:
+        connection.execute(
+            "INSERT INTO schools VALUES(?,?,?,?,?,?)",
+            tuple(data[key] for key in [
+                "id", "name", "prefecture", "school_type", "created_at", "updated_at"
+            ]),
+        )
+        connection.commit()
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "同じ都道府県・学校名の学校が登録されています")
+    finally:
+        connection.close()
+    return {**data, "rules": []}
+
+
+@app.post("/api/schools/{school_id}/rules", status_code=201)
+def create_school_rule(school_id: str, item: SchoolRuleInput):
+    data = item.model_dump()
+    connection = db()
+    now = datetime.now(timezone.utc).isoformat()
+    data.update({
+        "id": str(uuid.uuid4()),
+        "school_id": school_id,
+        "rule_data": json.dumps(data["rule_data"], ensure_ascii=False),
+        "created_at": now,
+        "updated_at": now,
+    })
+    try:
+        if not connection.execute(
+            "SELECT 1 FROM schools WHERE id=?", (school_id,)
+        ).fetchone():
+            raise HTTPException(404, "学校が見つかりません")
+        connection.execute(
+            """INSERT INTO school_rules (
+                id, school_id, admission_year, course, selection_type,
+                verification_status, official_source_url, verified_on,
+                rule_data, notes, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            tuple(data[key] for key in [
+                "id", "school_id", "admission_year", "course", "selection_type",
+                "verification_status", "official_source_url", "verified_on",
+                "rule_data", "notes", "created_at", "updated_at",
+            ]),
+        )
+        connection.commit()
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "同じ年度・コース・選抜区分のルールが登録されています")
+    finally:
+        connection.close()
+    data["rule_data"] = item.rule_data
+    return data
+
+
+@app.put("/api/school-rules/{rule_id}")
+def update_school_rule(rule_id: str, item: SchoolRuleInput):
+    data = item.model_dump()
+    connection = db()
+    try:
+        cursor = connection.execute(
+            """UPDATE school_rules SET admission_year=?, course=?, selection_type=?,
+               verification_status=?, official_source_url=?, verified_on=?,
+               rule_data=?, notes=?, updated_at=? WHERE id=?""",
+            (
+                data["admission_year"], data["course"], data["selection_type"],
+                data["verification_status"], data["official_source_url"],
+                data["verified_on"], json.dumps(data["rule_data"], ensure_ascii=False),
+                data["notes"], datetime.now(timezone.utc).isoformat(), rule_id,
+            ),
+        )
+        if not cursor.rowcount:
+            raise HTTPException(404, "選抜ルールが見つかりません")
+        connection.commit()
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "同じ年度・コース・選抜区分のルールが登録されています")
+    finally:
+        connection.close()
+    return {"id": rule_id, **data}
+
+
+@app.delete("/api/school-rules/{rule_id}", status_code=204)
+def delete_school_rule(rule_id: str):
+    connection = db()
+    try:
+        cursor = connection.execute("DELETE FROM school_rules WHERE id=?", (rule_id,))
+        connection.commit()
+    finally:
+        connection.close()
+    if not cursor.rowcount:
+        raise HTTPException(404, "選抜ルールが見つかりません")
+
+
+@app.delete("/api/schools/{school_id}", status_code=204)
+def delete_school(school_id: str):
+    connection = db()
+    try:
+        cursor = connection.execute("DELETE FROM schools WHERE id=?", (school_id,))
+        connection.commit()
+    finally:
+        connection.close()
+    if not cursor.rowcount:
+        raise HTTPException(404, "学校が見つかりません")
 
 
 @app.post("/api/import/table")

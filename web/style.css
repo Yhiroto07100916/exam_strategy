@@ -7,4 +7,4 @@
 
 .source-row{display:grid;grid-template-columns:150px 1fr;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:11px}.source-row strong{color:#c8d5e4}.source-row a{color:#a9c8e5}@media(max-width:750px){.source-row{grid-template-columns:1fr;gap:4px}}
 
-.school-allocation-result{margin-top:18px}.school-allocation-result .note{line-height:1.7}.school-allocation-result table{min-width:620px}.school-allocation-result h3{margin-bottom:10px}#school-allocation-panel{scroll-margin-top:18px}.school-allocation-panel .allocation-row{border-bottom:1px solid var(--line);padding:10px 0}
+#school-allocation-result{margin-top:18px}#school-allocation-result .note{line-height:1.7}#school-allocation-result table{min-width:620px}#school-allocation-result h3{margin-bottom:10px}#school-allocation-panel{scroll-margin-top:18px}.school-allocation-panel .allocation-row{border-bottom:1px solid var(--line);padding:10px 0}

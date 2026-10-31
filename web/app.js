@@ -53,7 +53,7 @@ const subjectFields=model.exam_subjects.map(x=>{
 const s=latest[x.subject],converted=s&&s.latest_max>0?Math.min(x.raw_max_score,Math.max(0,s.latest_score/s.latest_max*x.raw_max_score)):0;
 return '<div class="allocation-row"><strong>'+esc(x.subject)+'（満点 '+x.raw_max_score+'）</strong><label>現在点<input type="number" min="0" max="'+x.raw_max_score+'" step="0.1" required data-school-current="'+esc(x.subject)+'" value="'+converted.toFixed(1)+'"></label><label>学習優先度<input type="number" min="0.1" max="10" step="0.1" required data-school-priority="'+esc(x.subject)+'" value="1"></label><span class="note">選抜換算上限 '+x.contribution_max_score+'点 / 出典 p.'+x.source_page+'</span></div>'
 }).join('');
-const fixedFields=(model.fixed_components||[]).map(x=>'<div class="allocation-row"><strong>'+esc(x.name)+'（満点 '+x.max_score+'）</strong><label>現在の評価点<input type="number" min="0" max="'+x.max_score+'" step="0.1" required data-school-fixed="'+esc(x.name)+'" value="0"></label><span class="note">出典 p.'+x.source_page+'</span></div>').join('');
+const fixedFields=[{label:model.method_label||'基本方式',items:model.fixed_components||[]},...(model.alternatives||[]).map(x=>({label:x.label,items:x.fixed_components||[]}))].map(method=>method.items.map(x=>'<div class="allocation-row"><strong>'+esc(method.label)+' / '+esc(x.name)+'（満点 '+x.max_score+'）</strong><label>現在の評価点<input type="number" min="0" max="'+x.max_score+'" step="0.1" required data-school-fixed-method="'+esc(method.label)+'" data-school-fixed-name="'+esc(x.name)+'" value="0"></label><span class="note">出典 p.'+x.source_page+'</span></div>').join('')).join('');
 $('#school-allocation-fields').innerHTML=subjectFields+fixedFields;
 $('#school-allocation-result').innerHTML='';
 $('#school-allocation-panel').hidden=false;
@@ -63,10 +63,13 @@ $('#school-allocation-form').onsubmit=async e=>{
 e.preventDefault();if(!activeSchoolAllocation)return;
 const model=activeSchoolAllocation.model;
 const subjects=model.exam_subjects.map(x=>({subject:x.subject,current_score:Number($('[data-school-current="'+x.subject+'"]').value),priority:Number($('[data-school-priority="'+x.subject+'"]').value)}));
-const fixed_component_scores=Object.fromEntries((model.fixed_components||[]).map(x=>[x.name,Number(queryAll('[data-school-fixed]').find(el=>el.dataset.schoolFixed===x.name)?.value)]));
+const fixedValues=items=>Object.fromEntries((items||[]).map(x=>[x.name,Number(queryAll('[data-school-fixed-method]').find(el=>el.dataset.schoolFixedMethod===(activeSchoolAllocation.model.method_label||'基本方式')&&el.dataset.schoolFixedName===x.name)?.value)]));
+const fixed_component_scores=fixedValues(model.fixed_components);
+const alternative_fixed_component_scores=Object.fromEntries((model.alternatives||[]).map(x=>[x.label,Object.fromEntries((x.fixed_components||[]).map(item=>[item.name,Number(queryAll('[data-school-fixed-method]').find(el=>el.dataset.schoolFixedMethod===x.label&&el.dataset.schoolFixedName===item.name)?.value)]))]));
 const target_total=Number(new FormData(e.target).get('target_total'));
 try{
-const result=await api('/schools/'+activeSchoolAllocation.schoolId+'/rules/'+activeSchoolAllocation.ruleId+'/allocate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_total,subjects,fixed_component_scores})});
-$('#school-allocation-result').innerHTML='<h3>科目別目標点</h3><p>現在の選抜換算点 '+result.current_total+'点 → 計画 '+result.planned_total+'点 / 目標 '+result.requested_total+'点</p><div class="table"><table><thead><tr><th>科目</th><th>現在の素点</th><th>目標素点</th><th>必要な上積み</th><th>選抜換算点</th></tr></thead><tbody>'+result.subjects.map(x=>'<tr><td>'+esc(x.subject)+'</td><td>'+x.current_score+'/'+x.raw_max_score+'</td><td>'+x.target_score+'/'+x.raw_max_score+'</td><td>+'+x.increase+'</td><td>'+x.target_contribution+'/'+x.contribution_max_score+'</td></tr>').join('')+'</tbody></table></div><p class="note">'+esc(result.notice)+'</p>'+(result.already_at_or_above_goal?'<p>入力された現在点がすでに目標以上です。</p>':'');
+const result=await api('/schools/'+activeSchoolAllocation.schoolId+'/rules/'+activeSchoolAllocation.ruleId+'/allocate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_total,subjects,fixed_component_scores,alternative_fixed_component_scores})});
+const methodCards=result.method_results.map(method=>'<div class="panel"><h4>'+esc(method.method_label)+(method.method_label===result.best_current_method?'（現在点が最も高い方式）':'')+'</h4><p>現在 '+method.current_total+'点 → 計画 '+method.planned_total+'点 / 目標 '+method.requested_total+'点</p><div class="table"><table><thead><tr><th>科目</th><th>現在の素点</th><th>目標素点</th><th>必要な上積み</th><th>選抜換算点</th></tr></thead><tbody>'+method.subjects.map(x=>'<tr><td>'+esc(x.subject)+'</td><td>'+x.current_score+'/'+x.raw_max_score+'</td><td>'+x.target_score+'/'+x.raw_max_score+'</td><td>+'+x.increase+'</td><td>'+x.target_contribution+'/'+x.contribution_max_score+'</td></tr>').join('')+'</tbody></table></div></div>').join('');
+$('#school-allocation-result').innerHTML='<h3>方式別の科目目標</h3>'+methodCards+'<p class="note">'+esc(result.notice)+'</p>';
 }catch(x){toast(x.message)}
 };

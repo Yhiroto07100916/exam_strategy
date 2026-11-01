@@ -155,6 +155,8 @@ class Question(BaseModel):
 
     @model_validator(mode="after")
     def validate_points(self):
+        if (self.points is None) != (self.earned_points is None):
+            raise ValueError("配点と獲得点は両方入力するか、両方空欄にしてください")
         if self.points is not None and self.earned_points is not None:
             if self.earned_points > self.points:
                 raise ValueError("獲得点は配点以下にしてください")

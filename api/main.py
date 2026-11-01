@@ -5,6 +5,7 @@ import json
 import math
 import sqlite3
 import uuid
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -30,7 +31,14 @@ SCORE_COLUMNS = [
     "max_score", "deviation", "rank", "examinees", "created_at",
 ]
 
-app = FastAPI(title="Exam Strategy API", version="1.2.0")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    connection = db()
+    connection.close()
+    yield
+
+
+app = FastAPI(title="Exam Strategy API", version="1.2.0", lifespan=lifespan)
 app.include_router(target_router)
 
 
@@ -219,12 +227,6 @@ class SchoolRuleInput(BaseModel):
         return self
 
 
-
-
-@app.on_event("startup")
-def startup() -> None:
-    connection = db()
-    connection.close()
 
 
 @app.get("/api/health")

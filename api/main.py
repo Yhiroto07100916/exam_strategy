@@ -247,7 +247,6 @@ def scores():
     return [dict(row) for row in rows]
 
 
-@app.post("/api/scores", status_code=201)
 def score_duplicate_exists(
     connection: sqlite3.Connection,
     data: dict[str, Any],
@@ -264,6 +263,7 @@ def score_duplicate_exists(
     return connection.execute(query + " LIMIT 1", values).fetchone() is not None
 
 
+@app.post("/api/scores", status_code=201)
 def add_score(item: Score):
     data = item.model_dump()
     data["id"] = str(uuid.uuid4())

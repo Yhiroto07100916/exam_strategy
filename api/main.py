@@ -248,12 +248,34 @@ def scores():
 
 
 @app.post("/api/scores", status_code=201)
+def score_duplicate_exists(
+    connection: sqlite3.Connection,
+    data: dict[str, Any],
+    exclude_id: str | None = None,
+) -> bool:
+    query = """
+        SELECT 1 FROM scores
+        WHERE date=? AND exam_name=? AND exam_type=? AND subject=?
+    """
+    values = [data["date"], data["exam_name"], data["exam_type"], data["subject"]]
+    if exclude_id is not None:
+        query += " AND id<>?"
+        values.append(exclude_id)
+    return connection.execute(query + " LIMIT 1", values).fetchone() is not None
+
+
 def add_score(item: Score):
     data = item.model_dump()
     data["id"] = str(uuid.uuid4())
     data["created_at"] = datetime.now(timezone.utc).isoformat()
     connection = db()
     try:
+        connection.execute("BEGIN IMMEDIATE")
+        if score_duplicate_exists(connection, data):
+            raise HTTPException(
+                409,
+                "同じ日付・模試名・試験種別・科目の成績が既に登録されています",
+            )
         connection.execute(
             f"INSERT INTO scores ({','.join(SCORE_COLUMNS)}) VALUES ({','.join('?' for _ in SCORE_COLUMNS)})",
             tuple(data[key] for key in SCORE_COLUMNS),
@@ -269,11 +291,17 @@ def update_score(item_id: str, item: Score):
     data = item.model_dump()
     connection = db()
     try:
+        connection.execute("BEGIN IMMEDIATE")
         existing = connection.execute(
             "SELECT created_at FROM scores WHERE id = ?", (item_id,)
         ).fetchone()
         if existing is None:
             raise HTTPException(404, "成績が見つかりません")
+        if score_duplicate_exists(connection, data, exclude_id=item_id):
+            raise HTTPException(
+                409,
+                "同じ日付・模試名・試験種別・科目の成績が既に登録されています",
+            )
         connection.execute(
             """UPDATE scores SET date=?, exam_name=?, exam_type=?, subject=?,
                score=?, max_score=?, deviation=?, rank=?, examinees=?

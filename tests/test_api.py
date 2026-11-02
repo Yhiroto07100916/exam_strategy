@@ -527,3 +527,50 @@ def test_school_scoring_alternatives_require_comparable_total_maxima(tmp_path, m
             },
         })
         assert response.status_code == 422
+
+
+def test_manual_score_create_and_update_reject_duplicates_without_mutation(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        base = {
+            "date": "2026-11-01",
+            "exam_name": "11月模試",
+            "exam_type": "模試",
+            "subject": "数学",
+            "score": 72,
+            "max_score": 100,
+        }
+        first = client.post("/api/scores", json=base)
+        assert first.status_code == 201
+
+        duplicate = client.post("/api/scores", json={**base, "score": 80})
+        assert duplicate.status_code == 409
+        assert len(client.get("/api/scores").json()) == 1
+
+        different_type = client.post(
+            "/api/scores", json={**base, "exam_type": "定期考査"}
+        )
+        different_subject = client.post(
+            "/api/scores", json={**base, "subject": "英語"}
+        )
+        assert different_type.status_code == 201
+        assert different_subject.status_code == 201
+
+        english_id = different_subject.json()["id"]
+        collision = client.put(
+            f"/api/scores/{english_id}",
+            json={**base, "subject": "数学", "score": 88},
+        )
+        assert collision.status_code == 409
+
+        saved = next(
+            row for row in client.get("/api/scores").json()
+            if row["id"] == english_id
+        )
+        assert saved["subject"] == "英語"
+        assert saved["score"] == 72
+
+        self_update = client.put(
+            f"/api/scores/{first.json()['id']}", json={**base, "score": 75}
+        )
+        assert self_update.status_code == 200
+        assert self_update.json()["score"] == 75

@@ -28,15 +28,36 @@ def parse_ocr_candidates(page_texts: list[str]) -> list[dict[str, Any]]:
             normalized = line.replace("：", ":").replace("／", "/").strip()
             if not normalized:
                 continue
-            numbers = re.findall(r"(?<!\d)(\d{1,3})(?:\s*/\s*(\d{1,3}))?", normalized)
-            if not numbers:
+            subject_aliases = [
+                alias
+                for aliases in ALIASES.values()
+                for alias in aliases
+                if alias in normalized
+            ]
+            if not subject_aliases:
                 continue
+
+            fractions = re.findall(
+                r"(?<!\\d)(\\d{1,3})\\s*/\\s*(\\d{1,3})(?!\\d)",
+                normalized,
+            )
+            if fractions:
+                score = int(fractions[0][0])
+                maximum = int(fractions[0][1])
+            else:
+                standalone_numbers = re.findall(
+                    r"(?<!\\d)(\\d{1,3})(?!\\d)", normalized
+                )
+                if len(standalone_numbers) != 1:
+                    continue
+                score = int(standalone_numbers[0])
+                maximum = 100
+
+            if maximum <= 0 or score > maximum:
+                continue
+
             for subject, aliases in ALIASES.items():
                 if not any(alias in normalized for alias in aliases):
-                    continue
-                score = int(numbers[-1][0])
-                maximum = int(numbers[-1][1]) if numbers[-1][1] else 100
-                if maximum <= 0 or score > maximum:
                     continue
                 candidates.append({
                     "page": page_number,

@@ -37,16 +37,23 @@ def parse_ocr_candidates(page_texts: list[str]) -> list[dict[str, Any]]:
             if not subject_aliases:
                 continue
 
+            subject_alias = min(
+                subject_aliases,
+                key=lambda alias: (normalized.find(alias), -len(alias)),
+            )
+            subject_text = normalized[
+                normalized.find(subject_alias) + len(subject_alias):
+            ]
             fractions = re.findall(
                 r"(?<!\\d)(\\d{1,3})\\s*/\\s*(\\d{1,3})(?!\\d)",
-                normalized,
+                subject_text,
             )
             if fractions:
                 score = int(fractions[0][0])
                 maximum = int(fractions[0][1])
             else:
                 standalone_numbers = re.findall(
-                    r"(?<!\\d)(\\d{1,3})(?!\\d)", normalized
+                    r"(?<!\\d)(\\d{1,3})(?!\\d)", subject_text
                 )
                 if len(standalone_numbers) != 1:
                     continue

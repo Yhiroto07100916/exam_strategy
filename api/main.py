@@ -494,6 +494,44 @@ def analysis():
             })
     weak_units.sort(key=lambda item: (item["accuracy"], item["subject"], item["unit"]))
 
+    unit_trends = []
+    dated_questions = [
+        row for row in question_rows
+        if row["date"] and row["exam_name"]
+    ]
+    if dated_questions:
+        trend_df = pd.DataFrame([dict(row) for row in dated_questions])
+        for (exam_date, exam_name, subject, unit), group in trend_df.groupby(
+            ["date", "exam_name", "subject", "unit"], sort=True
+        ):
+            has_complete_points = (
+                group["points"].notna().all()
+                and group["earned_points"].notna().all()
+                and float(group["points"].sum()) > 0
+            )
+            if has_complete_points:
+                accuracy = float(
+                    group["earned_points"].sum() / group["points"].sum() * 100
+                )
+                method = "points"
+            else:
+                accuracy = float(group["correct"].mean() * 100)
+                method = "correct_count"
+            unit_trends.append({
+                "date": str(exam_date),
+                "exam_name": str(exam_name),
+                "subject": str(subject),
+                "unit": str(unit),
+                "questions": int(len(group)),
+                "accuracy": round(accuracy, 1),
+                "calculation": method,
+            })
+    unit_trends.sort(
+        key=lambda item: (
+            item["date"], item["exam_name"], item["subject"], item["unit"]
+        )
+    )
+
     target_subjects = settings.get("target", {}).get("subjects", {})
     target_gaps = []
     for subject_summary in summary:
@@ -517,6 +555,7 @@ def analysis():
     return {
         "summary": summary,
         "weak_units": weak_units,
+        "unit_trends": unit_trends,
         "latest_exam": latest_exam,
         "target_gaps": target_gaps,
     }

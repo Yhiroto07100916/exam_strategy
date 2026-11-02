@@ -102,6 +102,42 @@ def test_analysis_uses_correct_fallback_when_point_data_is_incomplete(tmp_path, 
         assert result["target_gaps"][0]["gap"] == 15
 
 
+def test_question_exam_metadata_must_be_complete(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        base = {
+            "subject": "数学",
+            "unit": "二次関数",
+            "correct": True,
+        }
+
+        date_only = client.post(
+            "/api/questions",
+            json={**base, "date": "2026-11-01"},
+        )
+        assert date_only.status_code == 422
+
+        name_only = client.post(
+            "/api/questions",
+            json={**base, "exam_name": "11月模試"},
+        )
+        assert name_only.status_code == 422
+
+        unlinked = client.post("/api/questions", json=base)
+        assert unlinked.status_code == 201
+        assert unlinked.json()["date"] is None
+        assert unlinked.json()["exam_name"] is None
+
+        linked = client.post(
+            "/api/questions",
+            json={**base, "date": "2026-11-01", "exam_name": "11月模試"},
+        )
+        assert linked.status_code == 201
+        trends = client.get("/api/analysis").json()["unit_trends"]
+        assert len(trends) == 1
+        assert trends[0]["date"] == "2026-11-01"
+        assert trends[0]["exam_name"] == "11月模試"
+
+
 def test_question_validation_and_excel_report(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         invalid = client.post("/api/questions", json={

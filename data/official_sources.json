@@ -1,6 +1,6 @@
 {
   "admission_year": 2027,
-  "last_checked": "2026-10-31",
+  "last_checked": "2026-11-03",
   "official_sources": [
     {
       "prefecture": "東京都",
@@ -36,19 +36,31 @@
       "prefecture": "埼玉県",
       "category": "公立",
       "url": "https://www.pref.saitama.lg.jp/f2208/r9nyuushi-senbatsuzisshinaiyou.html",
-      "note": "令和9年度各公立高校の選抜実施内容（確定版）。学校・学科ごとの選抜内容を確認"
+      "note": "令和9年度公立高校入試情報。2026年10月30日更新。実施要項・選抜要領・学校別選抜実施内容に加え、最新のお知らせを確認"
     },
     {
       "prefecture": "埼玉県",
       "category": "公立",
       "url": "https://www.pref.saitama.lg.jp/f2208/nyushi/r9nyushijyoho.html",
-      "note": "令和9年度公立高校入試情報。実施要項・選抜要領・学校別選抜実施内容への案内"
+      "note": "令和9年度公立高校入試情報。2026年10月30日更新。実施要項・選抜要領・学校別選抜実施内容に加え、最新のお知らせを確認"
     },
     {
       "prefecture": "千葉県",
       "category": "公立",
       "url": "https://www.pref.chiba.lg.jp/kyouiku/shidou/nyuushi/koukou/r9/",
-      "note": "令和9年度公立高校入学者選抜情報。実施要項、付表、各学校の選抜・評価方法への案内"
+      "note": "令和9年度公立高校入学者選抜情報。2026年10月15日更新。学校別の選抜・評価方法は各校Webページで公開されるため、共通要項と併せて確認"
+    },
+    {
+      "prefecture": "埼玉県",
+      "category": "私立",
+      "url": "https://www.pref.saitama.lg.jp/a0204/nyuusiyoukou.html",
+      "note": "令和9年度埼玉県私立高等学校入試要項。学校別PDFで募集人員・試験区分・日程等を確認。詳細条件は各校の募集要項で再確認"
+    },
+    {
+      "prefecture": "千葉県",
+      "category": "私立",
+      "url": "https://www.pref.chiba.lg.jp/gakuji/shiritsutou/shiritsu-boshuu/index.html",
+      "note": "令和9年度千葉県私立学校生徒募集要項。全日制・通信制の募集要項を確認。学校別の出願条件・配点等は各校の募集要項で再確認"
     }
   ],
   "policy": "都県・公私・学校・学科・年度・選抜区分ごとに公式資料を確認。学校別の配点・比率・評価方法は該当校の資料を出典付きで記録し、私立校の方式を都県共通の計算式で推定しない。"

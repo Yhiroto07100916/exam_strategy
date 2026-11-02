@@ -89,7 +89,10 @@ def test_question_edit_and_delete_refresh_unit_analysis(tmp_path, monkeypatch):
         first_id = first.json()["id"]
         second_id = second.json()["id"]
 
-        initial = client.get("/api/analysis").json()["weak_units"][0]
+        analysis = client.get("/api/analysis").json()
+        assert analysis["summary"] == []
+        assert analysis["latest_exam"] is None
+        initial = analysis["weak_units"][0]
         assert initial["questions"] == 2
         assert initial["accuracy"] == 60
         assert initial["calculation"] == "points"

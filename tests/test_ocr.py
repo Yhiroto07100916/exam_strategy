@@ -78,3 +78,27 @@ def test_confirmed_ocr_import_saves_and_deduplicates(tmp_path, monkeypatch):
         assert second.status_code == 200
         assert second.json() == {"imported": 0, "duplicates": 1}
         assert len(client.get("/api/scores").json()) == 1
+
+
+def test_parse_ocr_candidates_prefers_explicit_score_fraction():
+    candidates = ocr.parse_ocr_candidates([
+        "国語 80/100 偏差値 65",
+        "数学 72／100 合計 450/500",
+    ])
+    assert len(candidates) == 2
+    assert candidates[0]["score_candidate"] == 80
+    assert candidates[0]["max_score_candidate"] == 100
+    assert candidates[1]["score_candidate"] == 72
+    assert candidates[1]["max_score_candidate"] == 100
+
+
+def test_parse_ocr_candidates_skips_ambiguous_unlabelled_numbers():
+    candidates = ocr.parse_ocr_candidates([
+        "国語 80点 偏差値 65",
+        "数学 72点 100点",
+        "英語 90",
+    ])
+    assert len(candidates) == 1
+    assert candidates[0]["subject"] == "英語"
+    assert candidates[0]["score_candidate"] == 90
+    assert candidates[0]["max_score_candidate"] == 100

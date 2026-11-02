@@ -84,12 +84,15 @@ def test_parse_ocr_candidates_prefers_explicit_score_fraction():
     candidates = ocr.parse_ocr_candidates([
         "国語 80/100 偏差値 65",
         "数学 72／100 合計 450/500",
+        "10/01 国語 75/100",
     ])
-    assert len(candidates) == 2
+    assert len(candidates) == 3
     assert candidates[0]["score_candidate"] == 80
     assert candidates[0]["max_score_candidate"] == 100
     assert candidates[1]["score_candidate"] == 72
     assert candidates[1]["max_score_candidate"] == 100
+    assert candidates[2]["score_candidate"] == 75
+    assert candidates[2]["max_score_candidate"] == 100
 
 
 def test_parse_ocr_candidates_skips_ambiguous_unlabelled_numbers():

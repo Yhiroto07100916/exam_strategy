@@ -473,6 +473,13 @@ def test_official_school_source_directory():
         assert {item["prefecture"] for item in result["official_sources"]} == {
             "東京都", "神奈川県", "埼玉県", "千葉県"
         }
+        source_pairs = {
+            (item["prefecture"], item["category"])
+            for item in result["official_sources"]
+        }
+        assert ("埼玉県", "私立") in source_pairs
+        assert ("千葉県", "私立") in source_pairs
+        assert result["last_checked"] == "2026-11-03"
 
 
 def test_verified_school_rule_requires_source_cited_scoring_model(tmp_path, monkeypatch):

@@ -409,7 +409,6 @@ def analysis():
     if score_rows:
         scores_df = pd.DataFrame([dict(row) for row in score_rows])
         scores_df["rate"] = scores_df["score"] / scores_df["max_score"] * 100
-        summary = []
         for subject, group in scores_df.groupby("subject"):
             latest = group.iloc[-1]
             summary.append({

@@ -272,6 +272,97 @@ def test_question_update_and_validation(tmp_path, monkeypatch):
         assert client.put("/api/questions/missing", json=changed).status_code == 404
 
 
+def test_score_analysis_recalculates_after_update_and_delete(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        older = client.post("/api/scores", json={
+            "date": "2026-10-01",
+            "exam_name": "10月模試",
+            "subject": "数学",
+            "score": 60,
+            "max_score": 100,
+        }).json()
+        newer = client.post("/api/scores", json={
+            "date": "2026-11-01",
+            "exam_name": "11月模試",
+            "subject": "数学",
+            "score": 80,
+            "max_score": 100,
+        }).json()
+
+        updated = client.put(
+            f"/api/scores/{newer['id']}",
+            json={
+                "date": "2026-11-01",
+                "exam_name": "11月模試",
+                "subject": "数学",
+                "score": 70,
+                "max_score": 100,
+            },
+        )
+        assert updated.status_code == 200
+        analysis = client.get("/api/analysis").json()
+        assert analysis["latest_exam"]["name"] == "11月模試"
+        assert analysis["latest_exam"]["total"] == 70
+        assert analysis["summary"][0]["latest_score"] == 70
+
+        assert client.delete(f"/api/scores/{newer['id']}").status_code == 204
+        analysis = client.get("/api/analysis").json()
+        assert analysis["latest_exam"]["name"] == "10月模試"
+        assert analysis["latest_exam"]["total"] == 60
+        assert analysis["summary"][0]["latest_score"] == 60
+        assert analysis["summary"][0]["count"] == 1
+
+        assert client.delete(f"/api/scores/{older['id']}").status_code == 204
+        analysis = client.get("/api/analysis").json()
+        assert analysis["latest_exam"] is None
+        assert analysis["summary"] == []
+
+
+def test_question_analysis_recalculates_after_update_and_delete(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        created = client.post("/api/questions", json={
+            "date": "2026-10-01",
+            "exam_name": "10月模試",
+            "subject": "数学",
+            "unit": "二次関数",
+            "correct": False,
+            "points": 10,
+            "earned_points": 0,
+        })
+        assert created.status_code == 201
+        item_id = created.json()["id"]
+
+        initial = client.get("/api/analysis").json()
+        assert len(initial["unit_trends"]) == 1
+        assert initial["unit_trends"][0]["unit"] == "二次関数"
+        assert initial["weak_units"][0]["accuracy"] == 0
+
+        updated = client.put(f"/api/questions/{item_id}", json={
+            "date": "2026-11-01",
+            "exam_name": "11月模試",
+            "subject": "数学",
+            "unit": "図形",
+            "correct": True,
+            "points": 10,
+            "earned_points": 10,
+        })
+        assert updated.status_code == 200
+
+        after_update = client.get("/api/analysis").json()
+        assert len(after_update["unit_trends"]) == 1
+        assert after_update["unit_trends"][0]["date"] == "2026-11-01"
+        assert after_update["unit_trends"][0]["exam_name"] == "11月模試"
+        assert after_update["unit_trends"][0]["unit"] == "図形"
+        assert after_update["unit_trends"][0]["accuracy"] == 100
+        assert after_update["weak_units"][0]["unit"] == "図形"
+        assert after_update["weak_units"][0]["accuracy"] == 100
+
+        assert client.delete(f"/api/questions/{item_id}").status_code == 204
+        after_delete = client.get("/api/analysis").json()
+        assert after_delete["unit_trends"] == []
+        assert after_delete["weak_units"] == []
+
+
 def test_csv_import_skips_existing_and_in_file_duplicates(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         csv_data = (

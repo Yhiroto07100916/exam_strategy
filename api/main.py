@@ -355,7 +355,8 @@ def validate_question_exam_reference(
     if has_date == has_exam_name:
         return
     if existing is not None and (
-        item.date == existing["date"] and item.exam_name == existing["exam_name"]
+        item.date == (existing["date"] or None)
+        and item.exam_name == (existing["exam_name"] or None)
     ):
         return
     raise HTTPException(

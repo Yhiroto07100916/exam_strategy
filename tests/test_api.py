@@ -196,6 +196,45 @@ def test_weighted_subject_target_allocation(tmp_path, monkeypatch):
         assert "合格可能性" in result["notice"]
 
 
+def test_target_allocation_distributes_rounding_remainder(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/targets/allocate", json={
+            "target_total": 1,
+            "subjects": [
+                {"subject": "国語", "current_score": 0, "max_score": 100},
+                {"subject": "数学", "current_score": 0, "max_score": 100},
+                {"subject": "英語", "current_score": 0, "max_score": 100},
+            ],
+        })
+
+        assert response.status_code == 200
+        result = response.json()
+        target_sum = sum(item["target_score"] for item in result["subjects"])
+        assert target_sum == 1
+        assert result["planned_total"] == 1
+        assert sorted(item["target_score"] for item in result["subjects"]) == [
+            0.33, 0.33, 0.34
+        ]
+
+
+def test_target_allocation_does_not_reduce_scores_when_goal_is_already_met(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/targets/allocate", json={
+            "target_total": 20,
+            "subjects": [
+                {"subject": "国語", "current_score": 10, "max_score": 100},
+                {"subject": "数学", "current_score": 12, "max_score": 100},
+            ],
+        })
+
+        assert response.status_code == 200
+        result = response.json()
+        targets = {item["subject"]: item["target_score"] for item in result["subjects"]}
+        assert targets == {"国語": 10, "数学": 12}
+        assert result["planned_total"] == 22
+        assert result["already_at_or_above_goal"] is True
+
+
 def test_target_allocation_respects_subject_maximum_and_validation(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         capped = client.post("/api/targets/allocate", json={

@@ -152,7 +152,14 @@ class Question(BaseModel):
     @field_validator("date")
     @classmethod
     def validate_optional_date(cls, value: str | None) -> str | None:
-        return parse_date(value) if value else value
+        if value is None or not value.strip():
+            return None
+        return parse_date(value)
+
+    @field_validator("exam_name")
+    @classmethod
+    def normalize_exam_name(cls, value: str | None) -> str | None:
+        return value or None
 
     @field_validator("subject")
     @classmethod
@@ -168,6 +175,17 @@ class Question(BaseModel):
         if self.points is not None and self.earned_points is not None:
             if self.earned_points > self.points:
                 raise ValueError("獲得点は配点以下にしてください")
+        return self
+
+    @model_validator(mode="after")
+    def validate_exam_reference(self):
+        has_date = self.date is not None
+        has_exam_name = self.exam_name is not None
+        if has_date != has_exam_name:
+            raise ValueError(
+                "試験別分析を行う場合は実施日と試験名を両方入力してください。"
+                "未紐付けの問題として登録する場合は両方空欄にしてください"
+            )
         return self
 
 

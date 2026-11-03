@@ -138,6 +138,73 @@ def test_question_exam_metadata_must_be_complete(tmp_path, monkeypatch):
         assert trends[0]["exam_name"] == "11月模試"
 
 
+def test_legacy_incomplete_question_metadata_remains_editable(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        connection = api.db()
+        connection.executemany(
+            "INSERT INTO questions VALUES(?,?,?,?,?,?,?,?)",
+            [
+                ("legacy-question", "2026-10-01", None, "数学", "二次関数", 0, None, None),
+                ("legacy-empty-question", "", "旧試験", "国語", "漢字", 1, None, None),
+            ],
+        )
+        connection.commit()
+        connection.close()
+
+        legacy_edit = client.put("/api/questions/legacy-question", json={
+            "date": "2026-10-01",
+            "exam_name": "",
+            "subject": "数学",
+            "unit": "図形",
+            "correct": True,
+        })
+        assert legacy_edit.status_code == 200
+        assert legacy_edit.json()["unit"] == "図形"
+        assert legacy_edit.json()["exam_name"] is None
+
+        changed_partial_reference = client.put(
+            "/api/questions/legacy-question",
+            json={
+                "date": "2026-11-01",
+                "exam_name": "",
+                "subject": "数学",
+                "unit": "図形",
+                "correct": True,
+            },
+        )
+        assert changed_partial_reference.status_code == 422
+
+        completed_reference = client.put(
+            "/api/questions/legacy-question",
+            json={
+                "date": "2026-11-01",
+                "exam_name": "11月模試",
+                "subject": "数学",
+                "unit": "図形",
+                "correct": True,
+            },
+        )
+        assert completed_reference.status_code == 200
+        trends = client.get("/api/analysis").json()["unit_trends"]
+        assert len(trends) == 1
+        assert trends[0]["date"] == "2026-11-01"
+        assert trends[0]["exam_name"] == "11月模試"
+
+        empty_date_edit = client.put(
+            "/api/questions/legacy-empty-question",
+            json={
+                "date": "",
+                "exam_name": "旧試験",
+                "subject": "国語",
+                "unit": "語彙",
+                "correct": True,
+            },
+        )
+        assert empty_date_edit.status_code == 200
+        assert empty_date_edit.json()["date"] is None
+        assert empty_date_edit.json()["unit"] == "語彙"
+
+
 def test_question_validation_and_excel_report(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         invalid = client.post("/api/questions", json={

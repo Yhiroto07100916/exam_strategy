@@ -177,18 +177,6 @@ class Question(BaseModel):
                 raise ValueError("獲得点は配点以下にしてください")
         return self
 
-    @model_validator(mode="after")
-    def validate_exam_reference(self):
-        has_date = self.date is not None
-        has_exam_name = self.exam_name is not None
-        if has_date != has_exam_name:
-            raise ValueError(
-                "試験別分析を行う場合は実施日と試験名を両方入力してください。"
-                "未紐付けの問題として登録する場合は両方空欄にしてください"
-            )
-        return self
-
-
 class Settings(BaseModel):
     profile: dict[str, Any] = Field(default_factory=dict)
     target: dict[str, Any] = Field(default_factory=dict)
@@ -358,8 +346,29 @@ def questions():
     return [dict(row) for row in rows]
 
 
+def validate_question_exam_reference(
+    item: Question,
+    existing: sqlite3.Row | None = None,
+) -> None:
+    has_date = item.date is not None
+    has_exam_name = item.exam_name is not None
+    if has_date == has_exam_name:
+        return
+    if existing is not None and (
+        item.date == (existing["date"] or None)
+        and item.exam_name == (existing["exam_name"] or None)
+    ):
+        return
+    raise HTTPException(
+        422,
+        "試験別分析を行う場合は実施日と試験名を両方入力してください。"
+        "未紐付けの問題として登録する場合は両方空欄にしてください",
+    )
+
+
 @app.post("/api/questions", status_code=201)
 def add_question(item: Question):
+    validate_question_exam_reference(item)
     data = item.model_dump()
     data["id"] = str(uuid.uuid4())
     data["correct"] = int(data["correct"])
@@ -384,6 +393,12 @@ def update_question(item_id: str, item: Question):
     data["correct"] = int(data["correct"])
     connection = db()
     try:
+        existing = connection.execute(
+            "SELECT date, exam_name FROM questions WHERE id = ?", (item_id,)
+        ).fetchone()
+        if existing is None:
+            raise HTTPException(404, "問題データが見つかりません")
+        validate_question_exam_reference(item, existing)
         cursor = connection.execute(
             """UPDATE questions SET date=?, exam_name=?, subject=?, unit=?,
                correct=?, points=?, earned_points=? WHERE id=?""",

@@ -50,21 +50,70 @@ def allocate_subject_targets(
             break
 
     result = []
+    exact_goals: dict[str, float] = {}
     for item in subjects:
         current = float(item["current_score"])
         maximum = float(item["max_score"])
         goal = min(maximum, current + allocations[item["subject"]])
+        exact_goals[item["subject"]] = goal
+        rounded_goal = round(goal, 2)
         result.append({
             "subject": item["subject"],
             "current_score": round(current, 2),
-            "target_score": round(goal, 2),
+            "target_score": rounded_goal,
             "increase": round(goal - current, 2),
             "max_score": round(maximum, 2),
-            "target_rate": round(goal / maximum * 100, 1),
+            "target_rate": round(rounded_goal / maximum * 100, 1),
             "weight": float(item["weight"]),
         })
 
+    # Keep the displayed subject targets consistent with the displayed total.
+    # Distribute rounding cents by largest remainder without crossing score caps
+    # or lowering a subject below its displayed current score.
+    current_display_total = sum(
+        round(float(item["current_score"]), 2) for item in subjects
+    )
+    desired_total = max(round(planned_total, 2), current_display_total)
     allocated_total = sum(item["target_score"] for item in result)
+    residual = round(desired_total - allocated_total, 2)
+    subject_inputs = {item["subject"]: item for item in subjects}
+
+    while abs(residual) >= 0.01:
+        if residual > 0:
+            candidates = [
+                item for item in result
+                if item["target_score"] + 0.01
+                <= float(subject_inputs[item["subject"]]["max_score"]) + 1e-9
+            ]
+            candidates.sort(
+                key=lambda item: exact_goals[item["subject"]] - item["target_score"],
+                reverse=True,
+            )
+            adjustment = 0.01
+        else:
+            candidates = [
+                item for item in result
+                if item["target_score"] - 0.01
+                >= item["current_score"] - 1e-9
+            ]
+            candidates.sort(
+                key=lambda item: exact_goals[item["subject"]] - item["target_score"]
+            )
+            adjustment = -0.01
+
+        if not candidates:
+            break
+
+        item = candidates[0]
+        item["target_score"] = round(item["target_score"] + adjustment, 2)
+        item["increase"] = round(
+            item["target_score"] - item["current_score"], 2
+        )
+        maximum = float(subject_inputs[item["subject"]]["max_score"])
+        item["target_rate"] = round(item["target_score"] / maximum * 100, 1)
+        allocated_total = sum(entry["target_score"] for entry in result)
+        residual = round(desired_total - allocated_total, 2)
+
     return {
         "current_total": round(current_total, 2),
         "requested_total": round(float(target_total), 2),

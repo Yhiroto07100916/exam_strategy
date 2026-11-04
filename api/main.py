@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from pypdf import PdfReader
@@ -23,7 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 WEB = ROOT / "web"
 DB = DATA / "exam_strategy.sqlite3"
-from .main_models import SUBJECTS
+from .main_models import SUBJECTS, is_valid_subject
+from .exam_mode import EXAM_MODES, exam_mode_context, get_exam_mode
 from .target_routes import router as target_router
 from .school_targeting import SchoolScoringModel, SchoolTargetAllocationRequest, allocate_school_targets
 SCORE_COLUMNS = [
@@ -42,9 +43,23 @@ app = FastAPI(title="Exam Strategy API", version="1.2.0", lifespan=lifespan)
 app.include_router(target_router)
 
 
+@app.middleware("http")
+async def select_exam_mode(request: Request, call_next):
+    mode = request.headers.get("x-exam-mode", "high_school")
+    if mode not in EXAM_MODES:
+        return JSONResponse(status_code=400, content={"detail": "受験モードが不正です"})
+    token = exam_mode_context.set(mode)
+    try:
+        return await call_next(request)
+    finally:
+        exam_mode_context.reset(token)
+
+
+
 def db() -> sqlite3.Connection:
     DATA.mkdir(exist_ok=True)
-    connection = sqlite3.connect(DB)
+    database_path = DB if get_exam_mode() == 'high_school' else DB.with_name('university_' + DB.name)
+    connection = sqlite3.connect(database_path)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("""
@@ -125,8 +140,8 @@ class Score(BaseModel):
     @field_validator("subject")
     @classmethod
     def validate_subject(cls, value: str) -> str:
-        if value not in SUBJECTS:
-            raise ValueError("科目は国語・数学・英語・理科・社会から選択してください")
+        if not is_valid_subject(value):
+            raise ValueError("選択中の受験モードで利用できない科目です")
         return value
 
     @model_validator(mode="after")

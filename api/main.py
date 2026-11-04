@@ -74,9 +74,12 @@ def db() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS questions (
             id TEXT PRIMARY KEY, date TEXT, exam_name TEXT,
             subject TEXT NOT NULL, unit TEXT NOT NULL, correct INTEGER NOT NULL,
-            points REAL, earned_points REAL
+            points REAL, earned_points REAL, exam_type TEXT NOT NULL DEFAULT '模試'
         )
     """)
+    question_columns = {row["name"] for row in connection.execute("PRAGMA table_info(questions)").fetchall()}
+    if "exam_type" not in question_columns:
+        connection.execute("ALTER TABLE questions ADD COLUMN exam_type TEXT NOT NULL DEFAULT '模試'")
     connection.execute(
         "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
     )
@@ -158,6 +161,7 @@ class Question(BaseModel):
 
     date: str | None = None
     exam_name: str | None = Field(default=None, max_length=120)
+    exam_type: str = Field(default="模試", min_length=1, max_length=40)
     subject: str
     unit: str = Field(min_length=1, max_length=120)
     correct: bool
@@ -390,10 +394,12 @@ def add_question(item: Question):
     connection = db()
     try:
         connection.execute(
-            "INSERT INTO questions VALUES(?,?,?,?,?,?,?,?)",
+            """INSERT INTO questions
+               (id, date, exam_name, subject, unit, correct, points, earned_points, exam_type)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
             tuple(data[key] for key in [
                 "id", "date", "exam_name", "subject", "unit",
-                "correct", "points", "earned_points"
+                "correct", "points", "earned_points", "exam_type"
             ]),
         )
         connection.commit()
@@ -415,10 +421,10 @@ def update_question(item_id: str, item: Question):
             raise HTTPException(404, "問題データが見つかりません")
         validate_question_exam_reference(item, existing)
         cursor = connection.execute(
-            """UPDATE questions SET date=?, exam_name=?, subject=?, unit=?,
+            """UPDATE questions SET date=?, exam_name=?, exam_type=?, subject=?, unit=?,
                correct=?, points=?, earned_points=? WHERE id=?""",
             (
-                data["date"], data["exam_name"], data["subject"], data["unit"],
+                data["date"], data["exam_name"], data["exam_type"], data["subject"], data["unit"],
                 data["correct"], data["points"], data["earned_points"], item_id,
             ),
         )
@@ -567,8 +573,8 @@ def analysis():
     ]
     if dated_questions:
         trend_df = pd.DataFrame([dict(row) for row in dated_questions])
-        for (exam_date, exam_name, subject, unit), group in trend_df.groupby(
-            ["date", "exam_name", "subject", "unit"], sort=True
+        for (exam_date, exam_name, exam_type, subject, unit), group in trend_df.groupby(
+            ["date", "exam_name", "exam_type", "subject", "unit"], sort=True
         ):
             has_complete_points = (
                 group["points"].notna().all()
@@ -586,6 +592,7 @@ def analysis():
             unit_trends.append({
                 "date": str(exam_date),
                 "exam_name": str(exam_name),
+                "exam_type": str(exam_type),
                 "subject": str(subject),
                 "unit": str(unit),
                 "questions": int(len(group)),
@@ -594,7 +601,7 @@ def analysis():
             })
     unit_trends.sort(
         key=lambda item: (
-            item["date"], item["exam_name"], item["subject"], item["unit"]
+            item["date"], item["exam_name"], item["exam_type"], item["subject"], item["unit"]
         )
     )
 
@@ -993,8 +1000,8 @@ def report():
             connection,
         )
         questions_df = pd.read_sql_query(
-            """SELECT date, exam_name, subject, unit, correct, points, earned_points
-               FROM questions ORDER BY date, exam_name""",
+            """SELECT date, exam_name, exam_type, subject, unit, correct, points, earned_points
+               FROM questions ORDER BY date, exam_name, exam_type""",
             connection,
         )
     finally:

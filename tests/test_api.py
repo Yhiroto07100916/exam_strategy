@@ -171,6 +171,39 @@ def test_question_exam_metadata_must_be_complete(tmp_path, monkeypatch):
         assert trends[0]["exam_type"] == "模試"
 
 
+def test_existing_question_table_is_migrated_without_losing_rows(tmp_path, monkeypatch):
+    import sqlite3
+
+    database = tmp_path / "legacy.sqlite3"
+    connection = sqlite3.connect(database)
+    connection.execute("""
+        CREATE TABLE questions (
+            id TEXT PRIMARY KEY, date TEXT, exam_name TEXT,
+            subject TEXT NOT NULL, unit TEXT NOT NULL, correct INTEGER NOT NULL,
+            points REAL, earned_points REAL
+        )
+    """)
+    connection.execute(
+        "INSERT INTO questions VALUES(?,?,?,?,?,?,?,?)",
+        ("before-migration", "2026-10-01", "旧模試", "数学", "二次関数", 1, 10, 10),
+    )
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(api, "DB", database)
+
+    with TestClient(api.app) as client:
+        rows = client.get("/api/questions").json()
+        assert len(rows) == 1
+        assert rows[0]["id"] == "before-migration"
+        assert rows[0]["exam_type"] == "模試"
+        columns = {
+            row["name"] for row in sqlite3.connect(database).execute(
+                "PRAGMA table_info(questions)"
+            ).fetchall()
+        }
+        assert "exam_type" in columns
+
+
 def test_legacy_incomplete_question_metadata_remains_editable(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         connection = api.db()

@@ -200,6 +200,62 @@ class Settings(BaseModel):
     profile: dict[str, Any] = Field(default_factory=dict)
     target: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("target")
+    @classmethod
+    def validate_target(cls, value: dict[str, Any]) -> dict[str, Any]:
+        subjects = value.get("subjects", {})
+        if not isinstance(subjects, dict):
+            raise ValueError("科目別目標はオブジェクトで指定してください")
+        if len(subjects) > 20:
+            raise ValueError("科目別目標は20科目以内で指定してください")
+
+        for subject, config in subjects.items():
+            if not isinstance(subject, str) or not is_valid_subject(subject):
+                raise ValueError("選択中の受験モードで利用できない科目です")
+            if not isinstance(config, dict):
+                raise ValueError(f"{subject}の目標設定が不正です")
+
+            target_score = config.get("target_score")
+            max_score = config.get("max_score")
+            weight = config.get("weight")
+
+            for field_name, field_value in (
+                ("目標点", target_score),
+                ("満点", max_score),
+                ("優先度", weight),
+            ):
+                if field_value is None:
+                    continue
+                if isinstance(field_value, bool):
+                    raise ValueError(f"{subject}の{field_name}は数値で指定してください")
+                try:
+                    number = float(field_value)
+                except (TypeError, ValueError):
+                    raise ValueError(f"{subject}の{field_name}は数値で指定してください")
+                if not math.isfinite(number):
+                    raise ValueError(f"{subject}の{field_name}は有限の数値で指定してください")
+                if field_name == "目標点" and number < 0:
+                    raise ValueError(f"{subject}の目標点は0以上にしてください")
+                if field_name == "満点" and number <= 0:
+                    raise ValueError(f"{subject}の満点は0より大きくしてください")
+                if field_name == "優先度" and not 0 < number <= 10:
+                    raise ValueError(f"{subject}の優先度は0より大きく10以下にしてください")
+
+            if target_score is not None and max_score is not None:
+                if float(target_score) > float(max_score):
+                    raise ValueError(f"{subject}の目標点は満点以下にしてください")
+
+        university = value.get("university")
+        if university is not None:
+            if not isinstance(university, dict):
+                raise ValueError("大学情報の形式が不正です")
+            for field_name in ("university_name", "faculty", "department", "admission_method"):
+                field_value = university.get(field_name, "")
+                if not isinstance(field_value, str) or len(field_value) > 120:
+                    raise ValueError(f"大学情報の{field_name}は120文字以内で入力してください")
+
+        return value
+
 
 class OCRConfirmRequest(BaseModel):
     scores: list[Score] = Field(min_length=1, max_length=100)

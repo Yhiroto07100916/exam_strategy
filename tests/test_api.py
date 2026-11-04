@@ -388,6 +388,73 @@ def test_csv_import(tmp_path, monkeypatch):
         assert len(client.get('/api/scores').json()) == 1
 
 
+def test_csv_import_preview_does_not_write_and_marks_file_duplicates(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        csv_data = (
+            "date,exam_name,subject,score,max_score\n"
+            "2026-10-01,10月模試,国語,68,100\n"
+            "2026-10-01,10月模試,国語,68,100\n"
+            "2026-10-01,10月模試,音楽,80,100\n"
+        )
+        response = client.post(
+            "/api/import/table/preview",
+            files={"file": ("scores.csv", csv_data.encode("utf-8-sig"), "text/csv")},
+        )
+
+        assert response.status_code == 200
+        result = response.json()
+        assert result["total_rows"] == 3
+        assert result["duplicates"] == 1
+        assert [item["row"] for item in result["records"]] == [2, 3]
+        assert [item["duplicate"] for item in result["records"]] == [False, True]
+        assert result["records"][0]["data"]["subject"] == "国語"
+        assert result["errors"][0]["row"] == 4
+        assert client.get("/api/scores").json() == []
+
+
+def test_csv_import_confirm_rechecks_duplicates_and_imports_selected_rows(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        csv_data = (
+            "date,exam_name,subject,score,max_score\n"
+            "2026-10-01,10月模試,国語,68,100\n"
+            "2026-10-01,10月模試,数学,74,100\n"
+        )
+        preview = client.post(
+            "/api/import/table/preview",
+            files={"file": ("scores.csv", csv_data.encode("utf-8-sig"), "text/csv")},
+        )
+        assert preview.status_code == 200
+        records = preview.json()["records"]
+
+        externally_created = client.post(
+            "/api/scores",
+            json={
+                "date": "2026-10-01",
+                "exam_name": "10月模試",
+                "subject": "国語",
+                "score": 68,
+                "max_score": 100,
+            },
+        )
+        assert externally_created.status_code == 201
+
+        confirmed = client.post(
+            "/api/import/table/confirm",
+            json={"scores": [records[0]["data"], records[1]["data"]]},
+        )
+        assert confirmed.status_code == 200
+        assert confirmed.json() == {"imported": 1, "duplicates": 1}
+        saved = client.get("/api/scores").json()
+        assert {item["subject"] for item in saved} == {"国語", "数学"}
+
+        invalid = client.post(
+            "/api/import/table/confirm",
+            json={"scores": [{**records[1]["data"], "score": 101}]},
+        )
+        assert invalid.status_code == 422
+        assert len(client.get("/api/scores").json()) == 2
+
+
 def test_question_delete(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         item = client.post("/api/questions", json={

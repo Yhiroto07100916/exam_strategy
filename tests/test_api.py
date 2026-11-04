@@ -103,6 +103,32 @@ def test_analysis_uses_correct_fallback_when_point_data_is_incomplete(tmp_path, 
         assert result["target_gaps"][0]["gap"] == 15
 
 
+def test_question_exam_type_can_be_changed_when_editing(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        item = client.post("/api/questions", json={
+            "date": "2026-11-01",
+            "exam_name": "英語演習",
+            "exam_type": "模試",
+            "subject": "英語",
+            "unit": "長文読解",
+            "correct": False,
+        }).json()
+        updated = client.put("/api/questions/" + item["id"], json={
+            "date": "2026-11-01",
+            "exam_name": "英語演習",
+            "exam_type": "過去問",
+            "subject": "英語",
+            "unit": "長文読解",
+            "correct": True,
+        })
+        assert updated.status_code == 200
+        assert updated.json()["exam_type"] == "過去問"
+        trend = client.get("/api/analysis").json()["unit_trends"]
+        assert len(trend) == 1
+        assert trend[0]["exam_type"] == "過去問"
+        assert trend[0]["accuracy"] == 100.0
+
+
 def test_unit_trends_keep_common_test_and_past_papers_separate(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         headers = {"X-Exam-Mode": "university"}

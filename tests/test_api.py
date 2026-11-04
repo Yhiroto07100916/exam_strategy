@@ -391,10 +391,10 @@ def test_csv_import(tmp_path, monkeypatch):
 def test_csv_import_preview_does_not_write_and_marks_file_duplicates(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         csv_data = (
-            "date,exam_name,subject,score,max_score\n"
-            "2026-10-01,10月模試,国語,68,100\n"
-            "2026-10-01,10月模試,国語,68,100\n"
-            "2026-10-01,10月模試,音楽,80,100\n"
+            "date,exam_name,exam_type,subject,score,max_score\n"
+            "2026-10-01,10月模試,模試,国語,68,100\n"
+            "2026-10-01,10月模試,模試,国語,68,100\n"
+            "2026-10-01,10月模試,模試,音楽,80,100\n"
         )
         response = client.post(
             "/api/import/table/preview",
@@ -415,7 +415,7 @@ def test_csv_import_preview_does_not_write_and_marks_file_duplicates(tmp_path, m
 
 def test_csv_import_preview_marks_automatically_filled_fields_for_review(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
-        csv_data = "subject,score,max_score\\n国語,68,100\\n"
+        csv_data = "subject,score,max_score\n国語,68,100\n"
         response = client.post(
             "/api/import/table/preview",
             files={"file": ("scores.csv", csv_data.encode("utf-8-sig"), "text/csv")},

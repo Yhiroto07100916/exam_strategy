@@ -15,6 +15,7 @@ def test_health_and_empty_state(tmp_path, monkeypatch):
         assert client.get("/api/health").json()["status"] == "ok"
         assert client.get("/api/analysis").json() == {
             "summary": [],
+            "exam_type_summary": [],
             "weak_units": [],
             "unit_trends": [],
             "latest_exam": None,

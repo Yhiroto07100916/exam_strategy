@@ -607,7 +607,7 @@ def restore_backup(backup: BackupRestoreRequest, request: Request):
         for raw in backup.questions:
             item = Question.model_validate({
                 **raw,
-                "correct": bool(raw["correct"]),
+                "correct": raw["correct"],
             })
             data = item.model_dump()
             data["correct"] = int(data["correct"])

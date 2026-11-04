@@ -490,6 +490,51 @@ def test_target_allocation_respects_subject_maximum_and_validation(tmp_path, mon
         assert duplicate.status_code == 422
 
 
+
+def test_target_allocation_rejects_invalid_inputs(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        base_subjects = [
+            {"subject": "数学", "current_score": 50, "max_score": 100},
+            {"subject": "英語", "current_score": 50, "max_score": 100},
+        ]
+        invalid_payloads = [
+            {"target_total": -1, "subjects": base_subjects},
+            {"target_total": 50, "subjects": [{"subject": "数学", "current_score": 50, "max_score": 100}]},
+            {"target_total": 50, "subjects": [{**base_subjects[0], "current_score": 101}, base_subjects[1]]},
+            {"target_total": 50, "subjects": [{**base_subjects[0], "weight": 0}, base_subjects[1]]},
+            {"target_total": 50, "subjects": [{**base_subjects[0], "weight": 10.1}, base_subjects[1]]},
+        ]
+        for payload in invalid_payloads:
+            assert client.post("/api/targets/allocate", json=payload).status_code == 422
+
+        university_subject = {"subject": "情報I", "current_score": 50, "max_score": 100}
+        assert client.post("/api/targets/allocate", json={
+            "target_total": 100,
+            "subjects": [university_subject, base_subjects[1]],
+        }).status_code == 422
+        valid_university = client.post("/api/targets/allocate", headers={
+            "X-Exam-Mode": "university",
+        }, json={
+            "target_total": 100,
+            "subjects": [university_subject, {"subject": "数学IA", "current_score": 50, "max_score": 100}],
+        })
+        assert valid_university.status_code == 200
+
+
+def test_target_allocation_uses_only_selected_subjects(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/targets/allocate", json={
+            "target_total": 150,
+            "subjects": [
+                {"subject": "数学", "current_score": 50, "max_score": 100},
+                {"subject": "英語", "current_score": 50, "max_score": 100},
+            ],
+        })
+        assert response.status_code == 200
+        result = response.json()
+        assert {item["subject"] for item in result["subjects"]} == {"数学", "英語"}
+        assert result["maximum_total"] == 200
+
 def test_score_update_and_validation(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         original = {

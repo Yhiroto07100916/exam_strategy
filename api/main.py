@@ -180,7 +180,7 @@ class Question(BaseModel):
     @classmethod
     def validate_subject(cls, value: str) -> str:
         if not is_valid_subject(value):
-            raise ValueError("科目は国語・数学・英語・理科・社会から選択してください")
+            raise ValueError("選択中の受験モードで利用できない科目です")
         return value
 
     @model_validator(mode="after")
@@ -601,21 +601,35 @@ def analysis():
     target_subjects = settings.get("target", {}).get("subjects", {})
     target_gaps = []
     for subject_summary in summary:
-        goal = target_subjects.get(subject_summary["subject"], {}).get("target_score")
+        target_config = target_subjects.get(subject_summary["subject"], {})
+        goal = target_config.get("target_score")
         if goal is None:
             continue
         try:
             goal_value = float(goal)
+            target_max = float(target_config.get("max_score") or subject_summary["latest_max"])
         except (TypeError, ValueError):
             continue
-        if not math.isfinite(goal_value) or goal_value < 0:
+        if (
+            not math.isfinite(goal_value)
+            or not math.isfinite(target_max)
+            or goal_value < 0
+            or target_max <= 0
+            or goal_value > target_max
+        ):
             continue
+        current_rate = float(subject_summary["latest_rate"])
+        comparable_current = current_rate / 100 * target_max
         target_gaps.append({
             "subject": subject_summary["subject"],
             "current": subject_summary["latest_score"],
+            "current_max_score": subject_summary["latest_max"],
+            "current_rate": round(current_rate, 1),
+            "comparable_current": round(comparable_current, 1),
             "target": goal_value,
-            "gap": round(goal_value - subject_summary["latest_score"], 1),
-            "max_score": subject_summary["latest_max"],
+            "target_max_score": target_max,
+            "gap": round(goal_value - comparable_current, 1),
+            "max_score": target_max,
         })
 
     return {

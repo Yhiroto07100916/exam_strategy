@@ -1274,3 +1274,70 @@ def test_ocr_preview_passes_exam_mode_to_candidate_parser(tmp_path, monkeypatch)
         )
         assert response.status_code == 200
         assert response.json()["mode"] == "university"
+
+
+
+def test_university_excel_report_includes_exam_type_targets_and_weak_units(tmp_path, monkeypatch):
+    from io import BytesIO
+    from openpyxl import load_workbook
+
+    with make_client(tmp_path, monkeypatch) as client:
+        headers = {"X-Exam-Mode": "university"}
+        score_response = client.post("/api/scores", headers=headers, json={
+            "date": "2026-11-01",
+            "exam_name": "共通テスト模試",
+            "exam_type": "共通テスト",
+            "subject": "数学IA",
+            "score": 72,
+            "max_score": 100,
+        })
+        assert score_response.status_code == 201
+        question_response = client.post("/api/questions", headers=headers, json={
+            "date": "2026-11-01",
+            "exam_name": "共通テスト模試",
+            "exam_type": "共通テスト",
+            "subject": "数学IA",
+            "unit": "場合の数と確率",
+            "correct": False,
+            "points": 10,
+            "earned_points": 4,
+        })
+        assert question_response.status_code == 201
+        settings_response = client.put("/api/settings", headers=headers, json={
+            "profile": {},
+            "target": {
+                "university": {
+                    "university_name": "東京大学",
+                    "faculty": "理科一類",
+                    "department": "",
+                    "admission_method": "一般選抜",
+                },
+                "subjects": {
+                    "数学IA": {"target_score": 85, "max_score": 100, "weight": 2}
+                },
+            },
+        })
+        assert settings_response.status_code == 200
+
+        response = client.get("/api/reports/excel", headers=headers)
+        assert response.status_code == 200
+        workbook = load_workbook(BytesIO(response.content), data_only=True)
+
+        assert {
+            "成績データ", "問題別データ", "科目分析", "試験種別分析",
+            "科目別目標", "志望情報", "単元分析",
+        }.issubset(workbook.sheetnames)
+        exam_sheet = workbook["試験種別分析"]
+        assert exam_sheet["A2"].value == "共通テスト"
+        assert exam_sheet["B2"].value == "数学IA"
+        assert exam_sheet["G2"].value == 72
+        target_sheet = workbook["科目別目標"]
+        assert target_sheet["A2"].value == "数学IA"
+        assert target_sheet["B2"].value == 85
+        profile_values = {
+            row[0].value: row[1].value for row in workbook["志望情報"].iter_rows(min_row=2)
+        }
+        assert profile_values["志望大学"] == "東京大学"
+        unit_sheet = workbook["単元分析"]
+        assert unit_sheet["A2"].value == "数学IA"
+        assert unit_sheet["D2"].value == 40

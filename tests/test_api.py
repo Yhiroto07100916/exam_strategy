@@ -818,3 +818,68 @@ def test_manual_score_create_and_update_reject_duplicates_without_mutation(tmp_p
         )
         assert self_update.status_code == 200
         assert self_update.json()["score"] == 75
+
+
+def test_exam_modes_keep_score_and_question_data_separate(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        high_school_score = {
+            "date": "2026-11-04", "exam_name": "高校模試",
+            "exam_type": "模試", "subject": "数学", "score": 72, "max_score": 100,
+        }
+        university_score = {
+            "date": "2026-11-04", "exam_name": "大学模試",
+            "exam_type": "模試", "subject": "数学IA", "score": 68, "max_score": 100,
+        }
+        university_headers = {"X-Exam-Mode": "university"}
+
+        assert client.post("/api/scores", json=high_school_score).status_code == 201
+        assert client.post(
+            "/api/scores", json=university_score, headers=university_headers
+        ).status_code == 201
+        assert len(client.get("/api/scores").json()) == 1
+        university_rows = client.get(
+            "/api/scores", headers=university_headers
+        ).json()
+        assert len(university_rows) == 1
+        assert university_rows[0]["subject"] == "数学IA"
+
+        assert client.post(
+            "/api/scores", json={**high_school_score, "subject": "数学IA"}
+        ).status_code == 422
+        assert client.post(
+            "/api/scores",
+            json={**university_score, "subject": "数学"},
+            headers=university_headers,
+        ).status_code == 201
+
+        question = {
+            "date": "2026-11-04", "exam_name": "大学模試",
+            "subject": "物理", "unit": "力学", "correct": True,
+        }
+        assert client.post(
+            "/api/questions", json=question, headers=university_headers
+        ).status_code == 201
+        assert client.get("/api/questions").json() == []
+        assert len(client.get(
+            "/api/questions", headers=university_headers
+        ).json()) == 1
+        assert client.get(
+            "/api/scores", headers={"X-Exam-Mode": "unknown"}
+        ).status_code == 400
+
+
+def test_university_target_allocation_accepts_university_subjects(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        headers = {"X-Exam-Mode": "university"}
+        response = client.post("/api/targets/allocate", headers=headers, json={
+            "target_total": 300,
+            "subjects": [
+                {"subject": "英語リーディング", "current_score": 60, "max_score": 100, "weight": 1},
+                {"subject": "英語リスニング", "current_score": 55, "max_score": 100, "weight": 1},
+                {"subject": "数学IA", "current_score": 65, "max_score": 100, "weight": 1},
+                {"subject": "数学IIBC", "current_score": 50, "max_score": 100, "weight": 1},
+                {"subject": "情報I", "current_score": 70, "max_score": 100, "weight": 1},
+            ],
+        })
+        assert response.status_code == 200
+        assert len(response.json()["subjects"]) == 5

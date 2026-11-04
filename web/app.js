@@ -1,4 +1,4 @@
-const $=s=>document.querySelector(s),queryAll=s=>[...document.querySelectorAll(s)],examMode=localStorage.getItem('examMode')==='university'?'university':'high_school';let subjects=examMode==='university'?['国語','英語','英語リーディング','英語リスニング','数学IA','数学IIBC','数学III','物理','化学','生物','地学','地理総合・地理探究','歴史総合・日本史探究','歴史総合・世界史探究','公共・政治経済','情報I','小論文','面接']:['国語','数学','英語','理科','社会'];let scores=[],questions=[],analysis={},settings={profile:{},target:{}},ocrCandidates=[],activeSchoolAllocation=null;const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));function allocationFields(){const bySubject=Object.fromEntries((analysis.summary||[]).map(x=>[x.subject,x]));const configuredTargets=Object.entries(settings.target?.subjects||{}).filter(([,value])=>value?.target_score!==null&&value?.target_score!==undefined&&value?.target_score!=='').map(([subject])=>subject);const configured=new Set([...configuredTargets,...Object.keys(bySubject)]);$('#allocation-subjects').innerHTML=subjects.map(s=>{const x=bySubject[s]||{};const enabled=examMode==='high_school'||configured.has(s);return '<div class="allocation-row"><label class="allocation-toggle"><input type="checkbox" data-alloc-enabled="'+esc(s)+'" '+(enabled?'checked':'')+'> 配分対象</label><label>現在点<input type="number" min="0" step="0.1" data-alloc-current="'+esc(s)+'" value="'+(x.latest_score??0)+'"></label><label>満点<input type="number" min="0.1" step="0.1" data-alloc-max="'+esc(s)+'" value="'+(x.latest_max??100)+'"></label><label>優先度<input type="number" min="0.1" max="10" step="0.1" data-alloc-weight="'+esc(s)+'" value="1"></label></div>'}).join('')}function renderSchools(){$('#school-list').innerHTML=schools.map(s=>'<div class="panel school-card"><div class="school-head"><div><strong>'+esc(s.name)+'</strong><p>'+esc(s.prefecture)+' / '+esc(s.school_type)+'</p></div><div><button type="button" data-add-rule="'+esc(s.id)+'">選抜情報を追加</button> <button type="button" class="delete" data-delete-school="'+esc(s.id)+'">学校を削除</button></div></div>'+(s.rules||[]).map(r=>'<div class="rule-card"><div><strong>'+esc(r.admission_year+'年度・'+(r.course||'コース未指定')+'・'+r.selection_type)+'</strong><span class="rule-status">'+esc(r.verification_status)+'</span></div><p>'+esc(r.notes||'')+'</p>'+(r.official_source_url?'<p><a href="'+esc(r.official_source_url)+'" target="_blank" rel="noopener noreferrer">公式資料を開く</a></p>':'<p class="note">公式資料URL未登録</p>')+'<button type="button" data-edit-rule="'+esc(r.id)+'">編集</button> '+(r.verification_status==='確認済み'&&r.rule_data?.scoring_model?'<button type="button" data-allocate-school-rule="'+esc(s.id)+'|'+esc(r.id)+'">この選抜方式で目標点を計算</button>':'')+' <button type="button" class="delete" data-delete-rule="'+esc(r.id)+'">削除</button></div>').join('')+'</div>').join('')||'<p class="note">学校データがまだ登録されていません。</p>'}function renderOfficialSources(){const items=officialSources.official_sources||[];$('#official-source-list').innerHTML=items.map(x=>'<div class="source-row"><strong>'+esc(x.prefecture)+' / '+esc(x.category)+'</strong><a href="'+esc(x.url)+'" target="_blank" rel="noopener noreferrer">'+esc(x.note)+'</a></div>').join('')||'<p class="note">公式資料一覧がありません。</p>'}async function api(p,o={}){let r=await fetch('/api'+p,{...o,headers:{...(o.headers||{}),'X-Exam-Mode':examMode}});if(!r.ok){let d={};try{d=await r.json()}catch{}throw Error(d.detail||r.statusText)}if(r.status===204)return null;return r.json()}queryAll('#score-form select[name="subject"],#question-form select[name="subject"]').forEach(select=>{select.innerHTML=subjects.map(subject=>'<option value="'+esc(subject)+'">'+esc(subject)+'</option>').join('')});$('#exam-mode').value=examMode;$('#exam-mode').onchange=e=>{localStorage.setItem('examMode',e.target.value);location.reload()};if(examMode==='university'){queryAll('[data-high-school-only]').forEach(el=>el.hidden=true);$('#subtitle').textContent='大学受験・学習分析';$('#target-school-label').textContent='志望大学・学部・学科';$('#target-school-name').placeholder='大学・学部・学科';$('#target-school-name').parentElement.hidden=true;$('#target-prefecture-field').hidden=true;$('#university-target-fields').hidden=false;const typeSelect=$('#score-form').elements.exam_type;typeSelect.innerHTML=['模試','共通テスト','個別試験','過去問','定期試験','その他'].map(x=>'<option>'+x+'</option>').join('');$('#title').textContent='大学受験ダッシュボード';}function toast(s){let n=$('#toast');n.textContent=s;n.classList.add('show');setTimeout(()=>n.classList.remove('show'),2500)}async function refresh(){[scores,questions,analysis,settings,schools,officialSources]=await Promise.all([api('/scores'),api('/questions'),api('/analysis'),api('/settings'),api('/schools'),api('/schools/official-sources')]);render()}function renderUnitTrends(){
+const $=s=>document.querySelector(s),queryAll=s=>[...document.querySelectorAll(s)],examMode=localStorage.getItem('examMode')==='university'?'university':'high_school';let subjects=examMode==='university'?['国語','英語','英語リーディング','英語リスニング','数学IA','数学IIBC','数学III','物理','化学','生物','地学','地理総合・地理探究','歴史総合・日本史探究','歴史総合・世界史探究','公共・政治経済','情報I','小論文','面接']:['国語','数学','英語','理科','社会'];let scores=[],questions=[],analysis={},settings={profile:{},target:{}},ocrCandidates=[],activeSchoolAllocation=null,importPreview=null,importPage=0;const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));function allocationFields(){const bySubject=Object.fromEntries((analysis.summary||[]).map(x=>[x.subject,x]));const configuredTargets=Object.entries(settings.target?.subjects||{}).filter(([,value])=>value?.target_score!==null&&value?.target_score!==undefined&&value?.target_score!=='').map(([subject])=>subject);const configured=new Set([...configuredTargets,...Object.keys(bySubject)]);$('#allocation-subjects').innerHTML=subjects.map(s=>{const x=bySubject[s]||{};const enabled=examMode==='high_school'||configured.has(s);return '<div class="allocation-row"><label class="allocation-toggle"><input type="checkbox" data-alloc-enabled="'+esc(s)+'" '+(enabled?'checked':'')+'> 配分対象</label><label>現在点<input type="number" min="0" step="0.1" data-alloc-current="'+esc(s)+'" value="'+(x.latest_score??0)+'"></label><label>満点<input type="number" min="0.1" step="0.1" data-alloc-max="'+esc(s)+'" value="'+(x.latest_max??100)+'"></label><label>優先度<input type="number" min="0.1" max="10" step="0.1" data-alloc-weight="'+esc(s)+'" value="1"></label></div>'}).join('')}function renderSchools(){$('#school-list').innerHTML=schools.map(s=>'<div class="panel school-card"><div class="school-head"><div><strong>'+esc(s.name)+'</strong><p>'+esc(s.prefecture)+' / '+esc(s.school_type)+'</p></div><div><button type="button" data-add-rule="'+esc(s.id)+'">選抜情報を追加</button> <button type="button" class="delete" data-delete-school="'+esc(s.id)+'">学校を削除</button></div></div>'+(s.rules||[]).map(r=>'<div class="rule-card"><div><strong>'+esc(r.admission_year+'年度・'+(r.course||'コース未指定')+'・'+r.selection_type)+'</strong><span class="rule-status">'+esc(r.verification_status)+'</span></div><p>'+esc(r.notes||'')+'</p>'+(r.official_source_url?'<p><a href="'+esc(r.official_source_url)+'" target="_blank" rel="noopener noreferrer">公式資料を開く</a></p>':'<p class="note">公式資料URL未登録</p>')+'<button type="button" data-edit-rule="'+esc(r.id)+'">編集</button> '+(r.verification_status==='確認済み'&&r.rule_data?.scoring_model?'<button type="button" data-allocate-school-rule="'+esc(s.id)+'|'+esc(r.id)+'">この選抜方式で目標点を計算</button>':'')+' <button type="button" class="delete" data-delete-rule="'+esc(r.id)+'">削除</button></div>').join('')+'</div>').join('')||'<p class="note">学校データがまだ登録されていません。</p>'}function renderOfficialSources(){const items=officialSources.official_sources||[];$('#official-source-list').innerHTML=items.map(x=>'<div class="source-row"><strong>'+esc(x.prefecture)+' / '+esc(x.category)+'</strong><a href="'+esc(x.url)+'" target="_blank" rel="noopener noreferrer">'+esc(x.note)+'</a></div>').join('')||'<p class="note">公式資料一覧がありません。</p>'}async function api(p,o={}){let r=await fetch('/api'+p,{...o,headers:{...(o.headers||{}),'X-Exam-Mode':examMode}});if(!r.ok){let d={};try{d=await r.json()}catch{}throw Error(d.detail||r.statusText)}if(r.status===204)return null;return r.json()}queryAll('#score-form select[name="subject"],#question-form select[name="subject"]').forEach(select=>{select.innerHTML=subjects.map(subject=>'<option value="'+esc(subject)+'">'+esc(subject)+'</option>').join('')});$('#exam-mode').value=examMode;$('#exam-mode').onchange=e=>{localStorage.setItem('examMode',e.target.value);location.reload()};if(examMode==='university'){queryAll('[data-high-school-only]').forEach(el=>el.hidden=true);$('#subtitle').textContent='大学受験・学習分析';$('#target-school-label').textContent='志望大学・学部・学科';$('#target-school-name').placeholder='大学・学部・学科';$('#target-school-name').parentElement.hidden=true;$('#target-prefecture-field').hidden=true;$('#university-target-fields').hidden=false;const typeSelect=$('#score-form').elements.exam_type;typeSelect.innerHTML=['模試','共通テスト','個別試験','過去問','定期試験','その他'].map(x=>'<option>'+x+'</option>').join('');$('#title').textContent='大学受験ダッシュボード';}function toast(s){let n=$('#toast');n.textContent=s;n.classList.add('show');setTimeout(()=>n.classList.remove('show'),2500)}async function refresh(){[scores,questions,analysis,settings,schools,officialSources]=await Promise.all([api('/scores'),api('/questions'),api('/analysis'),api('/settings'),api('/schools'),api('/schools/official-sources')]);render()}function renderUnitTrends(){
 const groups=new Map();
 for(const item of analysis.unit_trends||[]){
 const key=JSON.stringify([item.subject,item.unit,item.exam_type||"模試"]);
@@ -22,24 +22,82 @@ if(!Number.isFinite(maxScore)||maxScore<=0||(targetScore!==null&&(!Number.isFini
 target.subjects[s]={target_score:targetScore,max_score:maxScore,weight:1};
 });
 if(invalidTargets.length)return toast('目標点・満点を確認してください：'+invalidTargets.join('、'));
-try{await api('/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile:settings.profile||{},target})});await refresh();toast('目標を保存しました')}catch(x){toast(x.message)}};$('#upload').onclick=async()=>{
+try{await api('/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile:settings.profile||{},target})});await refresh();toast('目標を保存しました')}catch(x){toast(x.message)}};function renderImportPreview(){
+const container=$('#import-preview');
+if(!importPreview){container.innerHTML='';$('#import-confirm').disabled=true;return}
+const records=importPreview.records||[];
+const pageSize=50;
+const pageCount=Math.max(1,Math.ceil(records.length/pageSize));
+importPage=Math.min(Math.max(importPage,0),pageCount-1);
+const start=importPage*pageSize;
+const visible=records.slice(start,start+pageSize);
+const selectedCount=records.filter(item=>item.selected&&!item.duplicate).length;
+const validCount=records.filter(item=>!item.duplicate).length;
+let html='<p class="note">'+importPreview.total_rows+'行中、有効な登録候補 '+validCount+'件 / 重複 '+importPreview.duplicates+'件 / 入力エラー '+importPreview.errors.length+'件。重複行は選択できません。</p>';
+if(records.length){
+html+='<div class="table import-table"><table><thead><tr><th>登録</th><th>行</th><th>試験日</th><th>試験名</th><th>試験種別</th><th>科目</th><th>得点</th><th>偏差値</th><th>順位</th><th>受験者数</th><th>状態</th></tr></thead><tbody>';
+html+=visible.map((item,offset)=>{
+const index=start+offset,data=item.data;
+return '<tr><td><input type="checkbox" data-import-index="'+index+'" '+(item.selected?'checked ':'')+(item.duplicate?'disabled':'')+' aria-label="行 '+item.row+'を登録"></td><td>'+item.row+'</td><td>'+esc(data.date)+'</td><td>'+esc(data.exam_name)+'</td><td>'+esc(data.exam_type)+'</td><td>'+esc(data.subject)+'</td><td>'+esc(data.score)+' / '+esc(data.max_score)+'</td><td>'+esc(data.deviation??'')+'</td><td>'+esc(data.rank??'')+'</td><td>'+esc(data.examinees??'')+'</td><td>'+(item.duplicate?'重複':'登録候補')+'</td></tr>';
+}).join('');
+html+='</tbody></table></div>';
+html+='<div class="import-pagination"><button type="button" data-import-page="-1" '+(importPage===0?'disabled':'')+'>前へ</button><span>ページ '+(importPage+1)+' / '+pageCount+'・選択 '+selectedCount+'件</span><button type="button" data-import-page="1" '+(importPage>=pageCount-1?'disabled':'')+'>次へ</button></div>';
+}else{
+html+='<p class="note">登録できる行がありません。下のエラー内容を確認してください。</p>';
+}
+if(importPreview.errors.length){
+html+='<details><summary>入力エラー '+importPreview.errors.length+'件を確認</summary><ul>';
+html+=importPreview.errors.slice(0,20).map(item=>'<li>行 '+item.row+'：'+esc(item.error)+'</li>').join('');
+if(importPreview.errors.length>20)html+='<li>ほか '+(importPreview.errors.length-20)+'件</li>';
+html+='</ul></details>';
+}
+container.innerHTML=html;
+$('#import-confirm').disabled=selectedCount===0;
+}
+$('#import-preview').onclick=e=>{
+const input=e.target.closest('[data-import-index]');
+if(input&&importPreview){
+importPreview.records[Number(input.dataset.importIndex)].selected=input.checked;
+renderImportPreview();
+return;
+}
+const page=e.target.closest('[data-import-page]');
+if(page){importPage+=Number(page.dataset.importPage);renderImportPreview()}
+};
+$('#table-file').onchange=()=>{
+importPreview=null;importPage=0;renderImportPreview();$('#upload-result').textContent='';
+};
+$('#upload').onclick=async()=>{
 const file=$('#table-file').files[0];
 if(!file)return toast('ファイルを選択してください');
-const data=new FormData();
-data.append('file',file);
-$('#upload').disabled=true;
-$('#upload-result').textContent='取り込み中...';
+const data=new FormData();data.append('file',file);
+$('#upload').disabled=true;$('#upload-result').textContent='プレビューを作成中...';
+importPreview=null;renderImportPreview();
 try{
-const result=await api('/import/table',{method:'POST',body:data});
-const summary=result.total_rows+'行中 '+result.imported+'件登録 / 重複 '+result.duplicates+'件 / エラー '+result.errors.length+'件';
-const errorDetails=result.errors.slice(0,20).map(item=>'行 '+item.row+': '+item.error).join('\n');
-$('#upload-result').textContent=summary+(errorDetails?'\n'+errorDetails:'')+(result.errors.length>20?'\\nほか '+(result.errors.length-20)+'件のエラー':'');
-await refresh();
+const result=await api('/import/table/preview',{method:'POST',body:data});
+importPreview={...result,records:result.records.map(item=>({...item,selected:!item.duplicate}))};
+importPage=0;renderImportPreview();
+$('#upload-result').textContent='登録する行を確認し、必要に応じて選択を外してください。';
 }catch(error){
 $('#upload-result').textContent=error.message;
+}finally{$('#upload').disabled=false}
+};
+$('#import-confirm').onclick=async()=>{
+if(!importPreview)return;
+const selected=importPreview.records.filter(item=>item.selected&&!item.duplicate).map(item=>item.data);
+if(!selected.length)return toast('登録する行を選択してください');
+$('#import-confirm').disabled=true;
+try{
+const result=await api('/import/table/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scores:selected})});
+importPreview=null;renderImportPreview();
+$('#upload-result').textContent=selected.length+'件を確認し、'+result.imported+'件登録 / 重複 '+result.duplicates+'件';
+try{await refresh()}catch(error){toast('登録は完了しましたが、画面更新に失敗しました：'+error.message)}
+}catch(error){
+$('#upload-result').textContent=error.message;
+if(importPreview)renderImportPreview();
 }
-finally{$('#upload').disabled=false}
-};$('#pdf').onclick=async()=>{let f=$('#pdf-file').files[0];if(!f)return toast('PDFを選択してください');let d=new FormData();d.append('file',f);try{let r=await api('/import/pdf',{method:'POST',body:d});$('#pdf-text').value=r.text;toast(r.needs_ocr?'画像PDFです。OCRが必要です。':'読み取りました')}catch(x){toast(x.message)}};refresh().catch(e=>toast('API接続エラー：'+e.message));
+};
+$('#pdf').onclick=async()=>{let f=$('#pdf-file').files[0];if(!f)return toast('PDFを選択してください');let d=new FormData();d.append('file',f);try{let r=await api('/import/pdf',{method:'POST',body:d});$('#pdf-text').value=r.text;toast(r.needs_ocr?'画像PDFです。OCRが必要です。':'読み取りました')}catch(x){toast(x.message)}};refresh().catch(e=>toast('API接続エラー：'+e.message));
 $('#question-form').onsubmit=async e=>{e.preventDefault();const form=e.target;let d=Object.fromEntries(new FormData(form));const id=d.id;delete d.id;d.correct=d.correct==='true';['points','earned_points'].forEach(k=>d[k]=d[k]===''?null:Number(d[k]));try{await api(id?'/questions/'+id:'/questions',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});form.reset();$('#question-submit').textContent='問題データを追加';$('#question-cancel').hidden=true;await refresh();toast(id?'問題データを更新しました':'問題データを保存しました')}catch(x){toast(x.message)}};$('#question-rows').onclick=async e=>{const editId=e.target.dataset.editQuestionId;if(editId){const item=questions.find(x=>x.id===editId);if(!item)return;const form=$('#question-form');['date','exam_name','exam_type','subject','unit','points','earned_points'].forEach(k=>form.elements[k].value=item[k]??(k==='exam_type'?'模試':''));form.elements.correct.value=String(Boolean(item.correct));form.elements.id.value=item.id;$('#question-submit').textContent='変更を保存';$('#question-cancel').hidden=false;return}const id=e.target.dataset.questionId;if(!id)return;if(confirm('この問題データを削除しますか？')){try{await api('/questions/'+id,{method:'DELETE'});await refresh()}catch(x){toast(x.message)}}};$('#question-cancel').onclick=()=>{$('#question-form').reset();$('#question-submit').textContent='問題データを追加';$('#question-cancel').hidden=true};
 
 $('#allocation-form').onsubmit=async e=>{

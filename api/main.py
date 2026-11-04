@@ -882,7 +882,9 @@ def delete_school(school_id: str):
 
 @app.post("/api/import/table")
 async def import_table(file: UploadFile = File(...)):
-    content = await file.read()
+    content = await file.read(MAX_PDF_BYTES + 1)
+    if len(content) > MAX_PDF_BYTES:
+        raise HTTPException(413, "CSV・Excelファイルは20MB以下にしてください")
     filename = (file.filename or "").lower()
     try:
         if filename.endswith((".xlsx", ".xls")):
@@ -1069,6 +1071,16 @@ def report():
         )
     finally:
         connection.close()
+
+    def safe_excel_text(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        first_visible = value.lstrip(" \\t\\r\\n")[:1]
+        return "'" + value if first_visible in {"=", "+", "-", "@"} else value
+
+    for frame in (scores_df, questions_df):
+        for column in frame.select_dtypes(include=["object"]).columns:
+            frame[column] = frame[column].map(safe_excel_text)
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:

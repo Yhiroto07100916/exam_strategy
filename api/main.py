@@ -518,6 +518,24 @@ def analysis():
             "subjects_count": int(len(latest_exam_rows)),
         }
 
+    exam_type_summary = []
+    if score_rows:
+        for (exam_type, subject), group in scores_df.groupby(
+            ["exam_type", "subject"], sort=True
+        ):
+            latest = group.iloc[-1]
+            exam_type_summary.append({
+                "exam_type": str(exam_type),
+                "subject": str(subject),
+                "count": int(len(group)),
+                "average_rate": round(float(group["rate"].mean()), 1),
+                "latest_date": str(latest["date"]),
+                "latest_exam_name": str(latest["exam_name"]),
+                "latest_score": float(latest["score"]),
+                "latest_max": float(latest["max_score"]),
+                "latest_rate": round(float(latest["rate"]), 1),
+            })
+
     weak_units = []
     if question_rows:
         question_df = pd.DataFrame([dict(row) for row in question_rows])
@@ -602,6 +620,7 @@ def analysis():
 
     return {
         "summary": summary,
+        "exam_type_summary": exam_type_summary,
         "weak_units": weak_units,
         "unit_trends": unit_trends,
         "latest_exam": latest_exam,

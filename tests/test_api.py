@@ -899,7 +899,7 @@ def test_university_target_profile_and_exam_types_are_isolated(tmp_path, monkeyp
                     "department": "数学科",
                     "admission_method": "一般選抜・前期日程",
                 },
-                "subjects": {"数学IA": {"target_score": 85, "max_score": 100}},
+                "subjects": {"数学IA": {"target_score": 170, "max_score": 200}},
             },
         }
         saved = client.put(
@@ -910,6 +910,9 @@ def test_university_target_profile_and_exam_types_are_isolated(tmp_path, monkeyp
         assert client.get(
             "/api/settings", headers=university_headers
         ).json()["target"]["university"]["admission_method"] == "一般選抜・前期日程"
+        assert client.get(
+            "/api/settings", headers=university_headers
+        ).json()["target"]["subjects"]["数学IA"]["max_score"] == 200
 
         common_test = {
             "date": "2026-11-04", "exam_name": "共通テスト模試",

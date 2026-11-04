@@ -32,8 +32,8 @@ $('#upload-result').textContent='取り込み中...';
 try{
 const result=await api('/import/table',{method:'POST',body:data});
 const summary=result.total_rows+'行中 '+result.imported+'件登録 / 重複 '+result.duplicates+'件 / エラー '+result.errors.length+'件';
-const errorDetails=result.errors.slice(0,20).map(item=>'行 '+item.row+': '+item.error).join('\\n');
-$('#upload-result').textContent=summary+(errorDetails?'\\n'+errorDetails:'')+(result.errors.length>20?'\\nほか '+(result.errors.length-20)+'件のエラー':'');
+const errorDetails=result.errors.slice(0,20).map(item=>'行 '+item.row+': '+item.error).join('\n');
+$('#upload-result').textContent=summary+(errorDetails?'\n'+errorDetails:'')+(result.errors.length>20?'\\nほか '+(result.errors.length-20)+'件のエラー':'');
 await refresh();
 }catch(error){
 $('#upload-result').textContent=error.message;

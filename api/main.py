@@ -27,6 +27,8 @@ from .main_models import is_valid_subject
 from .exam_mode import EXAM_MODES, exam_mode_context, get_exam_mode
 from .target_routes import router as target_router
 from .school_targeting import SchoolScoringModel, SchoolTargetAllocationRequest, allocate_school_targets
+MAX_IMPORT_ROWS = 10000
+
 SCORE_COLUMNS = [
     "id", "date", "exam_name", "exam_type", "subject", "score",
     "max_score", "deviation", "rank", "examinees", "created_at",
@@ -1113,9 +1115,21 @@ async def import_table(file: UploadFile = File(...)):
     except Exception:
         raise HTTPException(400, "ファイルを読み込めません。形式や内容を確認してください")
 
+    normalized_columns = [
+        str(column).replace("\\ufeff", "").strip()
+        for column in frame.columns
+    ]
+    if len(normalized_columns) != len(set(normalized_columns)):
+        raise HTTPException(422, "列名が重複しています。列名を整理してください")
+    frame.columns = normalized_columns
+
     required = {"subject", "score", "max_score"}
     if not required.issubset(frame.columns):
         raise HTTPException(422, "subject, score, max_score列が必要です")
+    if len(frame.index) == 0:
+        raise HTTPException(422, "取り込めるデータ行がありません")
+    if len(frame.index) > MAX_IMPORT_ROWS:
+        raise HTTPException(413, f"一度に取り込めるデータは{MAX_IMPORT_ROWS}行までです")
 
     errors = []
     parsed = []
@@ -1123,13 +1137,20 @@ async def import_table(file: UploadFile = File(...)):
     default_name = Path(file.filename or "取り込み").stem or "取り込み"
 
     def missing(value: Any) -> bool:
-        return value is None or bool(pd.isna(value)) or value == ""
+        if value is None:
+            return True
+        try:
+            return bool(pd.isna(value))
+        except (TypeError, ValueError):
+            return False
 
     def optional_number(row: pd.Series, column: str, integer: bool = False):
         value = row.get(column)
         if missing(value):
             return None
         number = float(value)
+        if not math.isfinite(number):
+            raise ValueError(f"{column}は有限の数値で入力してください")
         if integer:
             if not number.is_integer():
                 raise ValueError(f"{column}は整数で入力してください")
@@ -1157,7 +1178,7 @@ async def import_table(file: UploadFile = File(...)):
             )
             parsed.append(payload.model_dump())
         except Exception as error:
-            errors.append({"row": int(index) + 2, "error": str(error)})
+            errors.append({"row": int(index) + 2, "error": str(error)[:300]})
 
     connection = db()
     try:
@@ -1192,7 +1213,12 @@ async def import_table(file: UploadFile = File(...)):
     finally:
         connection.close()
 
-    return {"imported": len(accepted), "duplicates": duplicates, "errors": errors}
+    return {
+        "imported": len(accepted),
+        "duplicates": duplicates,
+        "errors": errors,
+        "total_rows": len(frame.index),
+    }
 
 
 @app.post("/api/import/pdf")

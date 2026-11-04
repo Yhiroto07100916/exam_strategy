@@ -103,6 +103,37 @@ def test_analysis_uses_correct_fallback_when_point_data_is_incomplete(tmp_path, 
         assert result["target_gaps"][0]["gap"] == 15
 
 
+def test_target_gap_normalizes_scores_to_configured_maximum(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        headers = {"X-Exam-Mode": "university"}
+        score = client.post("/api/scores", headers=headers, json={
+            "date": "2026-11-01",
+            "exam_name": "共通テスト模試",
+            "exam_type": "共通テスト",
+            "subject": "数学IA",
+            "score": 120,
+            "max_score": 200,
+        })
+        assert score.status_code == 201
+        saved = client.put("/api/settings", headers=headers, json={
+            "profile": {},
+            "target": {
+                "subjects": {
+                    "数学IA": {"target_score": 150, "max_score": 200}
+                }
+            },
+        })
+        assert saved.status_code == 200
+
+        gap = client.get("/api/analysis", headers=headers).json()["target_gaps"][0]
+        assert gap["current"] == 120
+        assert gap["current_rate"] == 60
+        assert gap["comparable_current"] == 120
+        assert gap["target"] == 150
+        assert gap["target_max_score"] == 200
+        assert gap["gap"] == 30
+
+
 def test_question_exam_metadata_must_be_complete(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         base = {

@@ -1075,7 +1075,7 @@ def report():
     def safe_excel_text(value: Any) -> Any:
         if not isinstance(value, str):
             return value
-        first_visible = value.lstrip(" \\t\\r\\n")[:1]
+        first_visible = value.lstrip(" \t\r\n")[:1]
         return "'" + value if first_visible in {"=", "+", "-", "@"} else value
 
     for frame in (scores_df, questions_df):

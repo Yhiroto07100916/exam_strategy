@@ -163,7 +163,7 @@ def test_settings_reject_invalid_target_subjects_and_scores(tmp_path, monkeypatc
 
         assert client.put("/api/settings", json={
             "profile": {},
-            "target": {"subjects": {"数学": {"target_score": 50, "max_score": float("inf")}}},
+            "target": {"subjects": {"数学": {"target_score": 50, "max_score": "Infinity"}}},
         }).status_code == 422
 
         valid = client.put("/api/settings", json={

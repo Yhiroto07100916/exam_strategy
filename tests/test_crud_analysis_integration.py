@@ -61,6 +61,7 @@ def test_score_edit_and_delete_refresh_analysis(tmp_path, monkeypatch):
         assert client.delete(f"/api/scores/{first_id}").status_code == 204
         assert client.get("/api/analysis").json() == {
             "summary": [],
+            "exam_type_summary": [],
             "weak_units": [],
             "unit_trends": [],
             "latest_exam": None,
@@ -172,6 +173,7 @@ def test_unit_trends_are_separated_by_exam_and_ignore_undated_legacy_rows(
         assert trends[0] == {
             "date": "2026-10-01",
             "exam_name": "10月模試",
+            "exam_type": "模試",
             "subject": "数学",
             "unit": "二次関数",
             "questions": 2,

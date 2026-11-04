@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from pypdf import PdfReader
@@ -23,7 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 WEB = ROOT / "web"
 DB = DATA / "exam_strategy.sqlite3"
-from .main_models import SUBJECTS
+from .main_models import is_valid_subject
+from .exam_mode import EXAM_MODES, exam_mode_context, get_exam_mode
 from .target_routes import router as target_router
 from .school_targeting import SchoolScoringModel, SchoolTargetAllocationRequest, allocate_school_targets
 SCORE_COLUMNS = [
@@ -42,9 +43,23 @@ app = FastAPI(title="Exam Strategy API", version="1.2.0", lifespan=lifespan)
 app.include_router(target_router)
 
 
+@app.middleware("http")
+async def select_exam_mode(request: Request, call_next):
+    mode = request.headers.get("x-exam-mode", "high_school")
+    if mode not in EXAM_MODES:
+        return JSONResponse(status_code=400, content={"detail": "受験モードが不正です"})
+    token = exam_mode_context.set(mode)
+    try:
+        return await call_next(request)
+    finally:
+        exam_mode_context.reset(token)
+
+
+
 def db() -> sqlite3.Connection:
     DATA.mkdir(exist_ok=True)
-    connection = sqlite3.connect(DB)
+    database_path = DB if get_exam_mode() == 'high_school' else DB.with_name('university_' + DB.name)
+    connection = sqlite3.connect(database_path)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("""
@@ -59,9 +74,12 @@ def db() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS questions (
             id TEXT PRIMARY KEY, date TEXT, exam_name TEXT,
             subject TEXT NOT NULL, unit TEXT NOT NULL, correct INTEGER NOT NULL,
-            points REAL, earned_points REAL
+            points REAL, earned_points REAL, exam_type TEXT NOT NULL DEFAULT '模試'
         )
     """)
+    question_columns = {row["name"] for row in connection.execute("PRAGMA table_info(questions)").fetchall()}
+    if "exam_type" not in question_columns:
+        connection.execute("ALTER TABLE questions ADD COLUMN exam_type TEXT NOT NULL DEFAULT '模試'")
     connection.execute(
         "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
     )
@@ -125,8 +143,8 @@ class Score(BaseModel):
     @field_validator("subject")
     @classmethod
     def validate_subject(cls, value: str) -> str:
-        if value not in SUBJECTS:
-            raise ValueError("科目は国語・数学・英語・理科・社会から選択してください")
+        if not is_valid_subject(value):
+            raise ValueError("選択中の受験モードで利用できない科目です")
         return value
 
     @model_validator(mode="after")
@@ -143,6 +161,7 @@ class Question(BaseModel):
 
     date: str | None = None
     exam_name: str | None = Field(default=None, max_length=120)
+    exam_type: str = Field(default="模試", min_length=1, max_length=40)
     subject: str
     unit: str = Field(min_length=1, max_length=120)
     correct: bool
@@ -164,8 +183,8 @@ class Question(BaseModel):
     @field_validator("subject")
     @classmethod
     def validate_subject(cls, value: str) -> str:
-        if value not in SUBJECTS:
-            raise ValueError("科目は国語・数学・英語・理科・社会から選択してください")
+        if not is_valid_subject(value):
+            raise ValueError("選択中の受験モードで利用できない科目です")
         return value
 
     @model_validator(mode="after")
@@ -180,6 +199,62 @@ class Question(BaseModel):
 class Settings(BaseModel):
     profile: dict[str, Any] = Field(default_factory=dict)
     target: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("target")
+    @classmethod
+    def validate_target(cls, value: dict[str, Any]) -> dict[str, Any]:
+        subjects = value.get("subjects", {})
+        if not isinstance(subjects, dict):
+            raise ValueError("科目別目標はオブジェクトで指定してください")
+        if len(subjects) > 20:
+            raise ValueError("科目別目標は20科目以内で指定してください")
+
+        for subject, config in subjects.items():
+            if not isinstance(subject, str) or not is_valid_subject(subject):
+                raise ValueError("選択中の受験モードで利用できない科目です")
+            if not isinstance(config, dict):
+                raise ValueError(f"{subject}の目標設定が不正です")
+
+            target_score = config.get("target_score")
+            max_score = config.get("max_score")
+            weight = config.get("weight")
+
+            for field_name, field_value in (
+                ("目標点", target_score),
+                ("満点", max_score),
+                ("優先度", weight),
+            ):
+                if field_value is None:
+                    continue
+                if isinstance(field_value, bool):
+                    raise ValueError(f"{subject}の{field_name}は数値で指定してください")
+                try:
+                    number = float(field_value)
+                except (TypeError, ValueError, OverflowError):
+                    raise ValueError(f"{subject}の{field_name}は数値で指定してください")
+                if not math.isfinite(number):
+                    raise ValueError(f"{subject}の{field_name}は有限の数値で指定してください")
+                if field_name == "目標点" and number < 0:
+                    raise ValueError(f"{subject}の目標点は0以上にしてください")
+                if field_name == "満点" and number <= 0:
+                    raise ValueError(f"{subject}の満点は0より大きくしてください")
+                if field_name == "優先度" and not 0 < number <= 10:
+                    raise ValueError(f"{subject}の優先度は0より大きく10以下にしてください")
+
+            if target_score is not None and max_score is not None:
+                if float(target_score) > float(max_score):
+                    raise ValueError(f"{subject}の目標点は満点以下にしてください")
+
+        university = value.get("university")
+        if university is not None:
+            if not isinstance(university, dict):
+                raise ValueError("大学情報の形式が不正です")
+            for field_name in ("university_name", "faculty", "department", "admission_method"):
+                field_value = university.get(field_name, "")
+                if not isinstance(field_value, str) or len(field_value) > 120:
+                    raise ValueError(f"大学情報の{field_name}は120文字以内で入力してください")
+
+        return value
 
 
 class OCRConfirmRequest(BaseModel):
@@ -375,10 +450,12 @@ def add_question(item: Question):
     connection = db()
     try:
         connection.execute(
-            "INSERT INTO questions VALUES(?,?,?,?,?,?,?,?)",
+            """INSERT INTO questions
+               (id, date, exam_name, subject, unit, correct, points, earned_points, exam_type)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
             tuple(data[key] for key in [
                 "id", "date", "exam_name", "subject", "unit",
-                "correct", "points", "earned_points"
+                "correct", "points", "earned_points", "exam_type"
             ]),
         )
         connection.commit()
@@ -400,10 +477,10 @@ def update_question(item_id: str, item: Question):
             raise HTTPException(404, "問題データが見つかりません")
         validate_question_exam_reference(item, existing)
         cursor = connection.execute(
-            """UPDATE questions SET date=?, exam_name=?, subject=?, unit=?,
+            """UPDATE questions SET date=?, exam_name=?, exam_type=?, subject=?, unit=?,
                correct=?, points=?, earned_points=? WHERE id=?""",
             (
-                data["date"], data["exam_name"], data["subject"], data["unit"],
+                data["date"], data["exam_name"], data["exam_type"], data["subject"], data["unit"],
                 data["correct"], data["points"], data["earned_points"], item_id,
             ),
         )
@@ -503,6 +580,24 @@ def analysis():
             "subjects_count": int(len(latest_exam_rows)),
         }
 
+    exam_type_summary = []
+    if score_rows:
+        for (exam_type, subject), group in scores_df.groupby(
+            ["exam_type", "subject"], sort=True
+        ):
+            latest = group.iloc[-1]
+            exam_type_summary.append({
+                "exam_type": str(exam_type),
+                "subject": str(subject),
+                "count": int(len(group)),
+                "average_rate": round(float(group["rate"].mean()), 1),
+                "latest_date": str(latest["date"]),
+                "latest_exam_name": str(latest["exam_name"]),
+                "latest_score": float(latest["score"]),
+                "latest_max": float(latest["max_score"]),
+                "latest_rate": round(float(latest["rate"]), 1),
+            })
+
     weak_units = []
     if question_rows:
         question_df = pd.DataFrame([dict(row) for row in question_rows])
@@ -534,8 +629,8 @@ def analysis():
     ]
     if dated_questions:
         trend_df = pd.DataFrame([dict(row) for row in dated_questions])
-        for (exam_date, exam_name, subject, unit), group in trend_df.groupby(
-            ["date", "exam_name", "subject", "unit"], sort=True
+        for (exam_date, exam_name, exam_type, subject, unit), group in trend_df.groupby(
+            ["date", "exam_name", "exam_type", "subject", "unit"], sort=True
         ):
             has_complete_points = (
                 group["points"].notna().all()
@@ -553,6 +648,7 @@ def analysis():
             unit_trends.append({
                 "date": str(exam_date),
                 "exam_name": str(exam_name),
+                "exam_type": str(exam_type),
                 "subject": str(subject),
                 "unit": str(unit),
                 "questions": int(len(group)),
@@ -561,32 +657,47 @@ def analysis():
             })
     unit_trends.sort(
         key=lambda item: (
-            item["date"], item["exam_name"], item["subject"], item["unit"]
+            item["date"], item["exam_name"], item["exam_type"], item["subject"], item["unit"]
         )
     )
 
     target_subjects = settings.get("target", {}).get("subjects", {})
     target_gaps = []
     for subject_summary in summary:
-        goal = target_subjects.get(subject_summary["subject"], {}).get("target_score")
+        target_config = target_subjects.get(subject_summary["subject"], {})
+        goal = target_config.get("target_score")
         if goal is None:
             continue
         try:
             goal_value = float(goal)
+            target_max = float(target_config.get("max_score") or subject_summary["latest_max"])
         except (TypeError, ValueError):
             continue
-        if not math.isfinite(goal_value) or goal_value < 0:
+        if (
+            not math.isfinite(goal_value)
+            or not math.isfinite(target_max)
+            or goal_value < 0
+            or target_max <= 0
+            or goal_value > target_max
+        ):
             continue
+        current_rate = float(subject_summary["latest_rate"])
+        comparable_current = current_rate / 100 * target_max
         target_gaps.append({
             "subject": subject_summary["subject"],
             "current": subject_summary["latest_score"],
+            "current_max_score": subject_summary["latest_max"],
+            "current_rate": round(current_rate, 1),
+            "comparable_current": round(comparable_current, 1),
             "target": goal_value,
-            "gap": round(goal_value - subject_summary["latest_score"], 1),
-            "max_score": subject_summary["latest_max"],
+            "target_max_score": target_max,
+            "gap": round(goal_value - comparable_current, 1),
+            "max_score": target_max,
         })
 
     return {
         "summary": summary,
+        "exam_type_summary": exam_type_summary,
         "weak_units": weak_units,
         "unit_trends": unit_trends,
         "latest_exam": latest_exam,
@@ -945,8 +1056,8 @@ def report():
             connection,
         )
         questions_df = pd.read_sql_query(
-            """SELECT date, exam_name, subject, unit, correct, points, earned_points
-               FROM questions ORDER BY date, exam_name""",
+            """SELECT date, exam_name, exam_type, subject, unit, correct, points, earned_points
+               FROM questions ORDER BY date, exam_name, exam_type""",
             connection,
         )
     finally:

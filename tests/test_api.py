@@ -15,6 +15,7 @@ def test_health_and_empty_state(tmp_path, monkeypatch):
         assert client.get("/api/health").json()["status"] == "ok"
         assert client.get("/api/analysis").json() == {
             "summary": [],
+            "exam_type_summary": [],
             "weak_units": [],
             "unit_trends": [],
             "latest_exam": None,
@@ -102,6 +103,124 @@ def test_analysis_uses_correct_fallback_when_point_data_is_incomplete(tmp_path, 
         assert result["target_gaps"][0]["gap"] == 15
 
 
+def test_question_exam_type_can_be_changed_when_editing(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        item = client.post("/api/questions", json={
+            "date": "2026-11-01",
+            "exam_name": "英語演習",
+            "exam_type": "模試",
+            "subject": "英語",
+            "unit": "長文読解",
+            "correct": False,
+        }).json()
+        updated = client.put("/api/questions/" + item["id"], json={
+            "date": "2026-11-01",
+            "exam_name": "英語演習",
+            "exam_type": "過去問",
+            "subject": "英語",
+            "unit": "長文読解",
+            "correct": True,
+        })
+        assert updated.status_code == 200
+        assert updated.json()["exam_type"] == "過去問"
+        trend = client.get("/api/analysis").json()["unit_trends"]
+        assert len(trend) == 1
+        assert trend[0]["exam_type"] == "過去問"
+        assert trend[0]["accuracy"] == 100.0
+
+
+def test_unit_trends_keep_common_test_and_past_papers_separate(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        headers = {"X-Exam-Mode": "university"}
+        for exam_type, correct in [("共通テスト", False), ("過去問", True)]:
+            response = client.post("/api/questions", headers=headers, json={
+                "date": "2026-11-01",
+                "exam_name": "英語演習",
+                "exam_type": exam_type,
+                "subject": "英語リーディング",
+                "unit": "長文読解",
+                "correct": correct,
+            })
+            assert response.status_code == 201
+
+        trends = client.get("/api/analysis", headers=headers).json()["unit_trends"]
+        assert len(trends) == 2
+        assert {row["exam_type"] for row in trends} == {"共通テスト", "過去問"}
+        assert {row["accuracy"] for row in trends} == {0.0, 100.0}
+
+
+def test_settings_reject_invalid_target_subjects_and_scores(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        assert client.put("/api/settings", json={
+            "profile": {},
+            "target": {"subjects": {"情報I": {"target_score": 70, "max_score": 100}}},
+        }).status_code == 422
+
+        assert client.put("/api/settings", json={
+            "profile": {},
+            "target": {"subjects": {"数学": {"target_score": 110, "max_score": 100}}},
+        }).status_code == 422
+
+        assert client.put("/api/settings", json={
+            "profile": {},
+            "target": {"subjects": {"数学": {"target_score": 50, "max_score": "Infinity"}}},
+        }).status_code == 422
+
+        valid = client.put("/api/settings", json={
+            "profile": {},
+            "target": {"subjects": {"数学": {"target_score": 75, "max_score": 100}}},
+        })
+        assert valid.status_code == 200
+
+
+def test_university_settings_accept_university_subject_targets(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        response = client.put("/api/settings", headers={"X-Exam-Mode": "university"}, json={
+            "profile": {},
+            "target": {
+                "university": {
+                    "university_name": "志望大学",
+                    "faculty": "理工学部",
+                    "department": "情報系",
+                    "admission_method": "一般選抜",
+                },
+                "subjects": {"情報I": {"target_score": 80, "max_score": 100}},
+            },
+        })
+        assert response.status_code == 200
+
+
+def test_target_gap_normalizes_scores_to_configured_maximum(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        headers = {"X-Exam-Mode": "university"}
+        score = client.post("/api/scores", headers=headers, json={
+            "date": "2026-11-01",
+            "exam_name": "共通テスト模試",
+            "exam_type": "共通テスト",
+            "subject": "数学IA",
+            "score": 120,
+            "max_score": 200,
+        })
+        assert score.status_code == 201
+        saved = client.put("/api/settings", headers=headers, json={
+            "profile": {},
+            "target": {
+                "subjects": {
+                    "数学IA": {"target_score": 150, "max_score": 200}
+                }
+            },
+        })
+        assert saved.status_code == 200
+
+        gap = client.get("/api/analysis", headers=headers).json()["target_gaps"][0]
+        assert gap["current"] == 120
+        assert gap["current_rate"] == 60
+        assert gap["comparable_current"] == 120
+        assert gap["target"] == 150
+        assert gap["target_max_score"] == 200
+        assert gap["gap"] == 30
+
+
 def test_question_exam_metadata_must_be_complete(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         base = {
@@ -136,13 +255,49 @@ def test_question_exam_metadata_must_be_complete(tmp_path, monkeypatch):
         assert len(trends) == 1
         assert trends[0]["date"] == "2026-11-01"
         assert trends[0]["exam_name"] == "11月模試"
+        assert trends[0]["exam_type"] == "模試"
+
+
+def test_existing_question_table_is_migrated_without_losing_rows(tmp_path, monkeypatch):
+    import sqlite3
+
+    database = tmp_path / "legacy.sqlite3"
+    connection = sqlite3.connect(database)
+    connection.execute("""
+        CREATE TABLE questions (
+            id TEXT PRIMARY KEY, date TEXT, exam_name TEXT,
+            subject TEXT NOT NULL, unit TEXT NOT NULL, correct INTEGER NOT NULL,
+            points REAL, earned_points REAL
+        )
+    """)
+    connection.execute(
+        "INSERT INTO questions VALUES(?,?,?,?,?,?,?,?)",
+        ("before-migration", "2026-10-01", "旧模試", "数学", "二次関数", 1, 10, 10),
+    )
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(api, "DB", database)
+
+    with TestClient(api.app) as client:
+        rows = client.get("/api/questions").json()
+        assert len(rows) == 1
+        assert rows[0]["id"] == "before-migration"
+        assert rows[0]["exam_type"] == "模試"
+        columns = {
+            row[1] for row in sqlite3.connect(database).execute(
+                "PRAGMA table_info(questions)"
+            ).fetchall()
+        }
+        assert "exam_type" in columns
 
 
 def test_legacy_incomplete_question_metadata_remains_editable(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         connection = api.db()
         connection.executemany(
-            "INSERT INTO questions VALUES(?,?,?,?,?,?,?,?)",
+            """INSERT INTO questions
+               (id, date, exam_name, subject, unit, correct, points, earned_points)
+               VALUES(?,?,?,?,?,?,?,?)""",
             [
                 ("legacy-question", "2026-10-01", None, "数学", "二次関数", 0, None, None),
                 ("legacy-empty-question", "", "旧試験", "国語", "漢字", 1, None, None),
@@ -334,6 +489,51 @@ def test_target_allocation_respects_subject_maximum_and_validation(tmp_path, mon
         })
         assert duplicate.status_code == 422
 
+
+
+def test_target_allocation_rejects_invalid_inputs(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        base_subjects = [
+            {"subject": "数学", "current_score": 50, "max_score": 100},
+            {"subject": "英語", "current_score": 50, "max_score": 100},
+        ]
+        invalid_payloads = [
+            {"target_total": -1, "subjects": base_subjects},
+            {"target_total": 50, "subjects": [{"subject": "数学", "current_score": 50, "max_score": 100}]},
+            {"target_total": 50, "subjects": [{**base_subjects[0], "current_score": 101}, base_subjects[1]]},
+            {"target_total": 50, "subjects": [{**base_subjects[0], "weight": 0}, base_subjects[1]]},
+            {"target_total": 50, "subjects": [{**base_subjects[0], "weight": 10.1}, base_subjects[1]]},
+        ]
+        for payload in invalid_payloads:
+            assert client.post("/api/targets/allocate", json=payload).status_code == 422
+
+        university_subject = {"subject": "情報I", "current_score": 50, "max_score": 100}
+        assert client.post("/api/targets/allocate", json={
+            "target_total": 100,
+            "subjects": [university_subject, base_subjects[1]],
+        }).status_code == 422
+        valid_university = client.post("/api/targets/allocate", headers={
+            "X-Exam-Mode": "university",
+        }, json={
+            "target_total": 100,
+            "subjects": [university_subject, {"subject": "数学IA", "current_score": 50, "max_score": 100}],
+        })
+        assert valid_university.status_code == 200
+
+
+def test_target_allocation_uses_only_selected_subjects(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/targets/allocate", json={
+            "target_total": 150,
+            "subjects": [
+                {"subject": "数学", "current_score": 50, "max_score": 100},
+                {"subject": "英語", "current_score": 50, "max_score": 100},
+            ],
+        })
+        assert response.status_code == 200
+        result = response.json()
+        assert {item["subject"] for item in result["subjects"]} == {"数学", "英語"}
+        assert result["maximum_total"] == 200
 
 def test_score_update_and_validation(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
@@ -818,3 +1018,157 @@ def test_manual_score_create_and_update_reject_duplicates_without_mutation(tmp_p
         )
         assert self_update.status_code == 200
         assert self_update.json()["score"] == 75
+
+
+def test_exam_modes_keep_score_and_question_data_separate(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        high_school_score = {
+            "date": "2026-11-04", "exam_name": "高校模試",
+            "exam_type": "模試", "subject": "数学", "score": 72, "max_score": 100,
+        }
+        university_score = {
+            "date": "2026-11-04", "exam_name": "大学模試",
+            "exam_type": "模試", "subject": "数学IA", "score": 68, "max_score": 100,
+        }
+        university_headers = {"X-Exam-Mode": "university"}
+
+        assert client.post("/api/scores", json=high_school_score).status_code == 201
+        assert client.post(
+            "/api/scores", json=university_score, headers=university_headers
+        ).status_code == 201
+        assert len(client.get("/api/scores").json()) == 1
+        university_rows = client.get(
+            "/api/scores", headers=university_headers
+        ).json()
+        assert len(university_rows) == 1
+        assert university_rows[0]["subject"] == "数学IA"
+
+        assert client.post(
+            "/api/scores", json={**high_school_score, "subject": "数学IA"}
+        ).status_code == 422
+        assert client.post(
+            "/api/scores",
+            json={**university_score, "subject": "数学IIBC"},
+            headers=university_headers,
+        ).status_code == 201
+
+        question = {
+            "date": "2026-11-04", "exam_name": "大学模試",
+            "subject": "物理", "unit": "力学", "correct": True,
+        }
+        assert client.post(
+            "/api/questions", json=question, headers=university_headers
+        ).status_code == 201
+        assert client.get("/api/questions").json() == []
+        assert len(client.get(
+            "/api/questions", headers=university_headers
+        ).json()) == 1
+        assert client.get(
+            "/api/scores", headers={"X-Exam-Mode": "unknown"}
+        ).status_code == 400
+
+
+def test_university_target_allocation_accepts_university_subjects(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        headers = {"X-Exam-Mode": "university"}
+        response = client.post("/api/targets/allocate", headers=headers, json={
+            "target_total": 300,
+            "subjects": [
+                {"subject": "英語リーディング", "current_score": 60, "max_score": 100, "weight": 1},
+                {"subject": "英語リスニング", "current_score": 55, "max_score": 100, "weight": 1},
+                {"subject": "数学IA", "current_score": 65, "max_score": 100, "weight": 1},
+                {"subject": "数学IIBC", "current_score": 50, "max_score": 100, "weight": 1},
+                {"subject": "情報I", "current_score": 70, "max_score": 100, "weight": 1},
+            ],
+        })
+        assert response.status_code == 200
+        assert len(response.json()["subjects"]) == 5
+
+
+def test_university_target_profile_and_exam_types_are_isolated(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        university_headers = {"X-Exam-Mode": "university"}
+        university_settings = {
+            "profile": {"name": "大学受験モード"},
+            "target": {
+                "school_name": "東京大学 / 理学部 / 数学科",
+                "admission_year": 2027,
+                "university": {
+                    "university_name": "東京大学",
+                    "faculty": "理学部",
+                    "department": "数学科",
+                    "admission_method": "一般選抜・前期日程",
+                },
+                "subjects": {"数学IA": {"target_score": 170, "max_score": 200}},
+            },
+        }
+        saved = client.put(
+            "/api/settings", json=university_settings, headers=university_headers
+        )
+        assert saved.status_code == 200
+        assert client.get("/api/settings").json()["target"] == {}
+        assert client.get(
+            "/api/settings", headers=university_headers
+        ).json()["target"]["university"]["admission_method"] == "一般選抜・前期日程"
+        assert client.get(
+            "/api/settings", headers=university_headers
+        ).json()["target"]["subjects"]["数学IA"]["max_score"] == 200
+
+        common_test = {
+            "date": "2026-11-04", "exam_name": "共通テスト模試",
+            "exam_type": "共通テスト", "subject": "情報I",
+            "score": 78, "max_score": 100,
+        }
+        individual = {
+            **common_test, "exam_name": "大学別模試",
+            "exam_type": "個別試験", "subject": "数学III",
+        }
+        assert client.post(
+            "/api/scores", json=common_test, headers=university_headers
+        ).status_code == 201
+        assert client.post(
+            "/api/scores", json=individual, headers=university_headers
+        ).status_code == 201
+        rows = client.get("/api/scores", headers=university_headers).json()
+        assert {row["exam_type"] for row in rows} == {"共通テスト", "個別試験"}
+
+
+def test_analysis_separates_university_exam_types_by_subject(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        headers = {"X-Exam-Mode": "university"}
+        rows = [
+            {
+                "date": "2026-10-01", "exam_name": "共通テスト模試",
+                "exam_type": "共通テスト", "subject": "英語リーディング",
+                "score": 70, "max_score": 100,
+            },
+            {
+                "date": "2026-11-01", "exam_name": "共通テスト模試",
+                "exam_type": "共通テスト", "subject": "英語リーディング",
+                "score": 80, "max_score": 100,
+            },
+            {
+                "date": "2026-11-02", "exam_name": "大学別模試",
+                "exam_type": "個別試験", "subject": "英語リーディング",
+                "score": 55, "max_score": 100,
+            },
+        ]
+        for row in rows:
+            response = client.post("/api/scores", json=row, headers=headers)
+            assert response.status_code == 201
+
+        analysis = client.get("/api/analysis", headers=headers).json()
+        breakdown = {
+            (row["exam_type"], row["subject"]): row
+            for row in analysis["exam_type_summary"]
+        }
+        common = breakdown[("共通テスト", "英語リーディング")]
+        individual = breakdown[("個別試験", "英語リーディング")]
+
+        assert common["count"] == 2
+        assert common["average_rate"] == 75.0
+        assert common["latest_rate"] == 80.0
+        assert common["latest_date"] == "2026-11-01"
+        assert individual["count"] == 1
+        assert individual["average_rate"] == 55.0
+        assert client.get("/api/analysis").json()["exam_type_summary"] == []

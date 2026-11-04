@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 
 from .target_allocator import allocate_subject_targets
-from .main_models import SUBJECTS
+from .exam_mode import subjects_for_mode
 
 
 router = APIRouter(prefix="/api/targets", tags=["targets"])
@@ -21,8 +21,8 @@ class AllocationSubject(BaseModel):
     @field_validator("subject")
     @classmethod
     def validate_subject(cls, value: str) -> str:
-        if value not in SUBJECTS:
-            raise ValueError("科目は国語・数学・英語・理科・社会から選択してください")
+        if value not in subjects_for_mode():
+            raise ValueError("選択中の受験モードで利用できない科目です")
         return value
 
     @model_validator(mode="after")
@@ -33,7 +33,7 @@ class AllocationSubject(BaseModel):
 
 
 class TargetAllocationRequest(BaseModel):
-    subjects: list[AllocationSubject] = Field(min_length=2, max_length=5)
+    subjects: list[AllocationSubject] = Field(min_length=2, max_length=20)
     target_total: float = Field(ge=0, allow_inf_nan=False)
 
     @model_validator(mode="after")

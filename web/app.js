@@ -103,3 +103,38 @@ const methodCards=result.method_results.map(method=>'<div class="panel"><h4>'+es
 $('#school-allocation-result').innerHTML='<h3>方式別の科目目標</h3>'+methodCards+'<p class="note">'+esc(result.notice)+'</p>';
 }catch(x){toast(x.message)}
 };
+
+
+
+$('#backup-download').onclick=async()=>{
+try{
+const response=await fetch('/api/backup',{headers:{'X-Exam-Mode':examMode}});
+if(!response.ok){let detail='バックアップを作成できませんでした';try{detail=(await response.json()).detail||detail}catch{}throw Error(detail)}
+const blob=await response.blob();
+const url=URL.createObjectURL(blob);
+const link=document.createElement('a');
+link.href=url;
+link.download='exam_strategy_'+examMode+'_'+new Date().toISOString().slice(0,10)+'.json';
+document.body.appendChild(link);
+link.click();
+link.remove();
+URL.revokeObjectURL(url);
+toast('バックアップをダウンロードしました');
+}catch(error){toast(error.message)}
+};
+
+$('#backup-restore').onclick=async()=>{
+const file=$('#backup-file').files[0];
+if(!file)return toast('復元するJSONファイルを選択してください');
+if(!$('#backup-confirm').checked)return toast('既存データを置き換える確認にチェックしてください');
+if(!confirm('現在の'+(examMode==='university'?'大学受験':'高校受験')+'データをバックアップ内容で置き換えます。続行しますか？'))return;
+try{
+const backup=JSON.parse(await file.text());
+backup.confirm_replace=true;
+const result=await api('/backup/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(backup)});
+$('#backup-file').value='';
+$('#backup-confirm').checked=false;
+toast('復元しました：成績 '+result.restored.scores+'件 / 問題 '+result.restored.questions+'件');
+await refresh();
+}catch(error){toast(error.message)}
+};

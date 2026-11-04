@@ -168,13 +168,16 @@ def test_question_exam_metadata_must_be_complete(tmp_path, monkeypatch):
         assert len(trends) == 1
         assert trends[0]["date"] == "2026-11-01"
         assert trends[0]["exam_name"] == "11月模試"
+        assert trends[0]["exam_type"] == "模試"
 
 
 def test_legacy_incomplete_question_metadata_remains_editable(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         connection = api.db()
         connection.executemany(
-            "INSERT INTO questions VALUES(?,?,?,?,?,?,?,?)",
+            """INSERT INTO questions
+               (id, date, exam_name, subject, unit, correct, points, earned_points)
+               VALUES(?,?,?,?,?,?,?,?)""",
             [
                 ("legacy-question", "2026-10-01", None, "数学", "二次関数", 0, None, None),
                 ("legacy-empty-question", "", "旧試験", "国語", "漢字", 1, None, None),

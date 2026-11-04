@@ -263,6 +263,10 @@ class OCRConfirmRequest(BaseModel):
     scores: list[Score] = Field(min_length=1, max_length=100)
 
 
+class ImportConfirmRequest(BaseModel):
+    scores: list[Score] = Field(min_length=1, max_length=MAX_IMPORT_ROWS)
+
+
 
 class BackupRestoreRequest(BaseModel):
     format_version: int
@@ -1097,16 +1101,14 @@ def delete_school(school_id: str):
         raise HTTPException(404, "学校が見つかりません")
 
 
-@app.post("/api/import/table")
-async def import_table(file: UploadFile = File(...)):
-    content = await file.read(MAX_PDF_BYTES + 1)
+def parse_import_table(content: bytes, filename: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
     if len(content) > MAX_PDF_BYTES:
         raise HTTPException(413, "CSV・Excelファイルは20MB以下にしてください")
-    filename = (file.filename or "").lower()
+    normalized_filename = filename.lower()
     try:
-        if filename.endswith((".xlsx", ".xls")):
+        if normalized_filename.endswith((".xlsx", ".xls")):
             frame = pd.read_excel(io.BytesIO(content))
-        elif filename.endswith(".csv"):
+        elif normalized_filename.endswith(".csv"):
             frame = pd.read_csv(io.BytesIO(content), encoding="utf-8-sig")
         else:
             raise HTTPException(415, "CSVまたはExcelファイルを選択してください")
@@ -1131,10 +1133,9 @@ async def import_table(file: UploadFile = File(...)):
     if len(frame.index) > MAX_IMPORT_ROWS:
         raise HTTPException(413, f"一度に取り込めるデータは{MAX_IMPORT_ROWS}行までです")
 
-    errors = []
-    parsed = []
-    duplicates = 0
-    default_name = Path(file.filename or "取り込み").stem or "取り込み"
+    errors: list[dict[str, Any]] = []
+    parsed: list[dict[str, Any]] = []
+    default_name = Path(filename or "取り込み").stem or "取り込み"
 
     def missing(value: Any) -> bool:
         if value is None:
@@ -1157,7 +1158,7 @@ async def import_table(file: UploadFile = File(...)):
             return int(number)
         return number
 
-    for index, row in frame.iterrows():
+    for row_number, (_, row) in enumerate(frame.iterrows(), start=2):
         try:
             date_value = row.get("date")
             date_text = date.today().isoformat() if missing(date_value) else str(date_value)[:10]
@@ -1176,49 +1177,124 @@ async def import_table(file: UploadFile = File(...)):
                 rank=optional_number(row, "rank", integer=True),
                 examinees=optional_number(row, "examinees", integer=True),
             )
-            parsed.append(payload.model_dump())
+            parsed.append({"row": row_number, "data": payload.model_dump()})
         except Exception as error:
-            errors.append({"row": int(index) + 2, "error": str(error)[:300]})
+            errors.append({"row": row_number, "error": str(error)[:300]})
 
+    return parsed, errors, len(frame.index)
+
+
+def score_import_key(data: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        data["date"],
+        data["exam_name"],
+        data["exam_type"],
+        data["subject"],
+    )
+
+
+def persist_import_scores(items: list[dict[str, Any]]) -> tuple[int, int]:
+    duplicates = 0
+    imported = 0
     connection = db()
     try:
         connection.execute("BEGIN IMMEDIATE")
-        existing_rows = connection.execute(
+        rows = connection.execute(
             "SELECT date, exam_name, exam_type, subject FROM scores"
         ).fetchall()
         existing_keys = {
             (row["date"], row["exam_name"], row["exam_type"], row["subject"])
-            for row in existing_rows
+            for row in rows
         }
-        accepted = []
-        for data in parsed:
-            key = (data["date"], data["exam_name"], data["exam_type"], data["subject"])
+        for item in items:
+            data = dict(item)
+            key = score_import_key(data)
             if key in existing_keys:
                 duplicates += 1
                 continue
             existing_keys.add(key)
             data["id"] = str(uuid.uuid4())
             data["created_at"] = datetime.now(timezone.utc).isoformat()
-            accepted.append(data)
-
-        for data in accepted:
             connection.execute(
                 f"INSERT INTO scores ({','.join(SCORE_COLUMNS)}) VALUES ({','.join('?' for _ in SCORE_COLUMNS)})",
-                tuple(data[key] for key in SCORE_COLUMNS),
+                tuple(data[column] for column in SCORE_COLUMNS),
             )
+            imported += 1
         connection.commit()
-    except Exception:
+    except Exception as error:
         connection.rollback()
-        raise HTTPException(500, "取り込み中にエラーが発生したため、データは保存されていません")
+        raise HTTPException(
+            500,
+            "取り込み中にエラーが発生したため、データは保存されていません",
+        ) from error
+    finally:
+        connection.close()
+    return imported, duplicates
+
+
+@app.post("/api/import/table")
+async def import_table(file: UploadFile = File(...)):
+    content = await file.read(MAX_PDF_BYTES + 1)
+    parsed, errors, total_rows = parse_import_table(
+        content, file.filename or "取り込み"
+    )
+    imported, duplicates = persist_import_scores(
+        [item["data"] for item in parsed]
+    )
+    return {
+        "imported": imported,
+        "duplicates": duplicates,
+        "errors": errors,
+        "total_rows": total_rows,
+    }
+
+
+@app.post("/api/import/table/preview")
+async def preview_import_table(file: UploadFile = File(...)):
+    content = await file.read(MAX_PDF_BYTES + 1)
+    parsed, errors, total_rows = parse_import_table(
+        content, file.filename or "取り込み"
+    )
+    connection = db()
+    try:
+        rows = connection.execute(
+            "SELECT date, exam_name, exam_type, subject FROM scores"
+        ).fetchall()
     finally:
         connection.close()
 
-    return {
-        "imported": len(accepted),
-        "duplicates": duplicates,
-        "errors": errors,
-        "total_rows": len(frame.index),
+    existing_keys = {
+        (row["date"], row["exam_name"], row["exam_type"], row["subject"])
+        for row in rows
     }
+    records = []
+    duplicates = 0
+    for item in parsed:
+        duplicate = score_import_key(item["data"]) in existing_keys
+        if duplicate:
+            duplicates += 1
+        else:
+            existing_keys.add(score_import_key(item["data"]))
+        records.append({
+            "row": item["row"],
+            "data": item["data"],
+            "duplicate": duplicate,
+        })
+
+    return {
+        "records": records,
+        "errors": errors,
+        "duplicates": duplicates,
+        "total_rows": total_rows,
+    }
+
+
+@app.post("/api/import/table/confirm")
+def confirm_table_import(request: ImportConfirmRequest):
+    imported, duplicates = persist_import_scores(
+        [item.model_dump() for item in request.scores]
+    )
+    return {"imported": imported, "duplicates": duplicates}
 
 
 @app.post("/api/import/pdf")

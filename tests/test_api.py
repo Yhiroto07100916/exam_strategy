@@ -883,3 +883,48 @@ def test_university_target_allocation_accepts_university_subjects(tmp_path, monk
         })
         assert response.status_code == 200
         assert len(response.json()["subjects"]) == 5
+
+
+def test_university_target_profile_and_exam_types_are_isolated(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        university_headers = {"X-Exam-Mode": "university"}
+        university_settings = {
+            "profile": {"name": "大学受験モード"},
+            "target": {
+                "school_name": "東京大学 / 理学部 / 数学科",
+                "admission_year": 2027,
+                "university": {
+                    "university_name": "東京大学",
+                    "faculty": "理学部",
+                    "department": "数学科",
+                    "admission_method": "一般選抜・前期日程",
+                },
+                "subjects": {"数学IA": {"target_score": 85, "max_score": 100}},
+            },
+        }
+        saved = client.put(
+            "/api/settings", json=university_settings, headers=university_headers
+        )
+        assert saved.status_code == 200
+        assert client.get("/api/settings").json()["target"] == {}
+        assert client.get(
+            "/api/settings", headers=university_headers
+        ).json()["target"]["university"]["admission_method"] == "一般選抜・前期日程"
+
+        common_test = {
+            "date": "2026-11-04", "exam_name": "共通テスト模試",
+            "exam_type": "共通テスト", "subject": "情報I",
+            "score": 78, "max_score": 100,
+        }
+        individual = {
+            **common_test, "exam_name": "大学別模試",
+            "exam_type": "個別試験", "subject": "数学III",
+        }
+        assert client.post(
+            "/api/scores", json=common_test, headers=university_headers
+        ).status_code == 201
+        assert client.post(
+            "/api/scores", json=individual, headers=university_headers
+        ).status_code == 201
+        rows = client.get("/api/scores", headers=university_headers).json()
+        assert {row["exam_type"] for row in rows} == {"共通テスト", "個別試験"}

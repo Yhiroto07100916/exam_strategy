@@ -928,3 +928,44 @@ def test_university_target_profile_and_exam_types_are_isolated(tmp_path, monkeyp
         ).status_code == 201
         rows = client.get("/api/scores", headers=university_headers).json()
         assert {row["exam_type"] for row in rows} == {"共通テスト", "個別試験"}
+
+
+def test_analysis_separates_university_exam_types_by_subject(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        headers = {"X-Exam-Mode": "university"}
+        rows = [
+            {
+                "date": "2026-10-01", "exam_name": "共通テスト模試",
+                "exam_type": "共通テスト", "subject": "英語リーディング",
+                "score": 70, "max_score": 100,
+            },
+            {
+                "date": "2026-11-01", "exam_name": "共通テスト模試",
+                "exam_type": "共通テスト", "subject": "英語リーディング",
+                "score": 80, "max_score": 100,
+            },
+            {
+                "date": "2026-11-02", "exam_name": "大学別模試",
+                "exam_type": "個別試験", "subject": "英語リーディング",
+                "score": 55, "max_score": 100,
+            },
+        ]
+        for row in rows:
+            response = client.post("/api/scores", json=row, headers=headers)
+            assert response.status_code == 201
+
+        analysis = client.get("/api/analysis", headers=headers).json()
+        breakdown = {
+            (row["exam_type"], row["subject"]): row
+            for row in analysis["exam_type_summary"]
+        }
+        common = breakdown[("共通テスト", "英語リーディング")]
+        individual = breakdown[("個別試験", "英語リーディング")]
+
+        assert common["count"] == 2
+        assert common["average_rate"] == 75.0
+        assert common["latest_rate"] == 80.0
+        assert common["latest_date"] == "2026-11-01"
+        assert individual["count"] == 1
+        assert individual["average_rate"] == 55.0
+        assert client.get("/api/analysis").json()["exam_type_summary"] == []

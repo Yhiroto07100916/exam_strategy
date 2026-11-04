@@ -1341,3 +1341,114 @@ def test_university_excel_report_includes_exam_type_targets_and_weak_units(tmp_p
         unit_sheet = workbook["単元分析"]
         assert unit_sheet["A2"].value == "数学IA"
         assert unit_sheet["D2"].value == 40
+
+
+
+def test_backup_restore_round_trip_preserves_mode_data_and_school_rules(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        headers = {"X-Exam-Mode": "high_school"}
+        score = client.post("/api/scores", headers=headers, json={
+            "date": "2026-11-03",
+            "exam_name": "11月模試",
+            "exam_type": "模試",
+            "subject": "数学",
+            "score": 76,
+            "max_score": 100,
+        })
+        assert score.status_code == 201
+        question = client.post("/api/questions", headers=headers, json={
+            "date": "2026-11-03",
+            "exam_name": "11月模試",
+            "exam_type": "模試",
+            "subject": "数学",
+            "unit": "二次関数",
+            "correct": False,
+            "points": 5,
+            "earned_points": 2,
+        })
+        assert question.status_code == 201
+        settings = client.put("/api/settings", headers=headers, json={
+            "profile": {"nickname": "sample"},
+            "target": {"subjects": {"数学": {"target_score": 80, "max_score": 100}}},
+        })
+        assert settings.status_code == 200
+        school = client.post("/api/schools", headers=headers, json={
+            "name": "テスト高校",
+            "prefecture": "東京都",
+            "school_type": "公立",
+        })
+        assert school.status_code == 201
+        school_id = school.json()["id"]
+        rule = client.post(f"/api/schools/{school_id}/rules", headers=headers, json={
+            "admission_year": 2027,
+            "course": "普通科",
+            "selection_type": "一般選抜",
+            "verification_status": "未確認",
+            "rule_data": {"memo": "backup test"},
+        })
+        assert rule.status_code == 201
+
+        exported = client.get("/api/backup", headers=headers)
+        assert exported.status_code == 200
+        backup = exported.json()
+        assert backup["format_version"] == 1
+        assert backup["exam_mode"] == "high_school"
+        assert len(backup["scores"]) == 1
+        assert len(backup["questions"]) == 1
+        assert len(backup["schools"]) == 1
+        assert len(backup["school_rules"]) == 1
+
+        client.delete(f"/api/scores/{score.json()['id']}", headers=headers)
+        client.delete(f"/api/questions/{question.json()['id']}", headers=headers)
+        client.delete(f"/api/schools/{school_id}", headers=headers)
+        client.put("/api/settings", headers=headers, json={"profile": {}, "target": {}})
+
+        restored = client.post(
+            "/api/backup/restore",
+            headers=headers,
+            json={**backup, "confirm_replace": True},
+        )
+        assert restored.status_code == 200
+        assert restored.json()["restored"] == {
+            "scores": 1, "questions": 1, "schools": 1, "school_rules": 1
+        }
+        assert len(client.get("/api/scores", headers=headers).json()) == 1
+        assert len(client.get("/api/questions", headers=headers).json()) == 1
+        assert len(client.get("/api/schools", headers=headers).json()) == 1
+        assert client.get("/api/settings", headers=headers).json()["profile"]["nickname"] == "sample"
+
+
+def test_backup_restore_requires_confirmation_and_matching_exam_mode(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        backup = client.get("/api/backup").json()
+        missing_confirmation = client.post("/api/backup/restore", json=backup)
+        assert missing_confirmation.status_code == 400
+
+        wrong_mode = client.post(
+            "/api/backup/restore",
+            headers={"X-Exam-Mode": "university"},
+            json={**backup, "confirm_replace": True},
+        )
+        assert wrong_mode.status_code == 409
+
+
+def test_invalid_backup_does_not_replace_existing_data(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        created = client.post("/api/scores", json={
+            "date": "2026-11-03",
+            "exam_name": "保持する模試",
+            "subject": "数学",
+            "score": 50,
+            "max_score": 100,
+        })
+        assert created.status_code == 201
+        backup = client.get("/api/backup").json()
+        backup["scores"][0]["score"] = 999
+        response = client.post(
+            "/api/backup/restore",
+            json={**backup, "confirm_replace": True},
+        )
+        assert response.status_code == 422
+        scores = client.get("/api/scores").json()
+        assert len(scores) == 1
+        assert scores[0]["exam_name"] == "保持する模試"

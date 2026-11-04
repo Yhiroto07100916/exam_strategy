@@ -1207,3 +1207,34 @@ def test_pdf_text_preview_rejects_oversized_files(tmp_path, monkeypatch):
             files={"file": ("large.pdf", b"x" * (MAX_PDF_BYTES + 1), "application/pdf")},
         )
         assert response.status_code == 413
+
+
+def test_table_import_rejects_oversized_files(tmp_path, monkeypatch):
+    from api.ocr import MAX_PDF_BYTES
+
+    with make_client(tmp_path, monkeypatch) as client:
+        response = client.post(
+            "/api/import/table",
+            files={"file": ("large.csv", b"x" * (MAX_PDF_BYTES + 1), "text/csv")},
+        )
+        assert response.status_code == 413
+
+
+def test_excel_report_escapes_formula_like_user_text(tmp_path, monkeypatch):
+    from io import BytesIO
+    from openpyxl import load_workbook
+
+    with make_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/questions", json={
+            "subject": "数学",
+            "unit": "=HYPERLINK(\"https://example.com\",\"click\")",
+            "correct": True,
+        })
+        assert response.status_code == 201
+
+        report = client.get("/api/reports/excel")
+        assert report.status_code == 200
+        workbook = load_workbook(BytesIO(report.content), data_only=False)
+        cell = workbook["問題別データ"]["E2"]
+        assert cell.data_type == "s"
+        assert cell.value.startswith("'=")

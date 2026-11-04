@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from pypdf import PdfReader
 
-from .ocr import MAX_PDF_BYTES, preview_pdf_ocr
+from .ocr import MAX_PDF_BYTES, MAX_PDF_PAGES, preview_pdf_ocr
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
@@ -982,9 +982,16 @@ async def import_table(file: UploadFile = File(...)):
 async def import_pdf(file: UploadFile = File(...)):
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(415, "PDFファイルを選択してください")
+    content = await file.read(MAX_PDF_BYTES + 1)
+    if len(content) > MAX_PDF_BYTES:
+        raise HTTPException(413, "PDFは20MB以下のファイルを選択してください")
     try:
-        pages = PdfReader(io.BytesIO(await file.read())).pages
+        pages = PdfReader(io.BytesIO(content)).pages
+        if len(pages) > MAX_PDF_PAGES:
+            raise HTTPException(413, "読み込めるPDFは20ページまでです")
         texts = [page.extract_text() or "" for page in pages]
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(400, "PDFを読み込めません。ファイルが破損していないか確認してください")
     extracted = "\n\n".join(
@@ -1002,7 +1009,7 @@ async def preview_pdf_ocr_endpoint(file: UploadFile = File(...)):
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(415, "PDFファイルを選択してください")
     try:
-        return preview_pdf_ocr(await file.read(MAX_PDF_BYTES + 1))
+        return preview_pdf_ocr(await file.read(MAX_PDF_BYTES + 1), mode=get_exam_mode())
     except RuntimeError as error:
         raise HTTPException(503, str(error))
     except ValueError as error:

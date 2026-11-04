@@ -1061,24 +1061,123 @@ def report():
     try:
         scores_df = pd.read_sql_query(
             """SELECT date, exam_name, exam_type, subject, score, max_score,
-                      deviation, rank, examinees FROM scores ORDER BY date, exam_name""",
+                      deviation, rank, examinees FROM scores ORDER BY date, exam_name, exam_type, subject""",
             connection,
         )
         questions_df = pd.read_sql_query(
             """SELECT date, exam_name, exam_type, subject, unit, correct, points, earned_points
-               FROM questions ORDER BY date, exam_name, exam_type""",
+               FROM questions ORDER BY date, exam_name, exam_type, subject, unit""",
             connection,
         )
+        setting_rows = connection.execute(
+            "SELECT key, value FROM settings"
+        ).fetchall()
     finally:
         connection.close()
+
+    settings = {row["key"]: json.loads(row["value"]) for row in setting_rows}
+    profile = settings.get("profile", {})
+    target = settings.get("target", {})
+    university = target.get("university", {}) if isinstance(target, dict) else {}
+    subject_targets = target.get("subjects", {}) if isinstance(target, dict) else {}
 
     def safe_excel_text(value: Any) -> Any:
         if not isinstance(value, str):
             return value
-        first_visible = value.lstrip(" \t\r\n")[:1]
+        first_visible = value.lstrip(" \\t\\r\\n")[:1]
         return "'" + value if first_visible in {"=", "+", "-", "@"} else value
 
     for frame in (scores_df, questions_df):
+        for column in frame.select_dtypes(include=["object"]).columns:
+            frame[column] = frame[column].map(safe_excel_text)
+
+    subject_analysis = pd.DataFrame(
+        columns=["科目", "記録数", "平均得点率", "最高得点率", "最低得点率"]
+    )
+    exam_type_analysis = pd.DataFrame(
+        columns=["試験種別", "科目", "記録数", "平均得点率", "最新日", "最新試験", "最新得点率"]
+    )
+    if not scores_df.empty:
+        analysis_scores = scores_df.copy()
+        analysis_scores["得点率"] = (
+            analysis_scores["score"] / analysis_scores["max_score"] * 100
+        )
+        subject_analysis = (
+            analysis_scores.groupby("subject")["得点率"]
+            .agg(["count", "mean", "max", "min"])
+            .round(1)
+            .reset_index()
+            .rename(columns={
+                "subject": "科目", "count": "記録数", "mean": "平均得点率",
+                "max": "最高得点率", "min": "最低得点率",
+            })
+        )
+        exam_rows = []
+        for (exam_type, subject), group in analysis_scores.groupby(
+            ["exam_type", "subject"], sort=True
+        ):
+            latest = group.iloc[-1]
+            exam_rows.append({
+                "試験種別": exam_type,
+                "科目": subject,
+                "記録数": int(len(group)),
+                "平均得点率": round(float(group["得点率"].mean()), 1),
+                "最新日": str(latest["date"]),
+                "最新試験": str(latest["exam_name"]),
+                "最新得点率": round(float(latest["得点率"]), 1),
+            })
+        exam_type_analysis = pd.DataFrame(exam_rows)
+
+    target_rows = []
+    for subject, config in subject_targets.items():
+        if not isinstance(config, dict):
+            continue
+        target_rows.append({
+            "科目": subject,
+            "目標点": config.get("target_score"),
+            "満点": config.get("max_score"),
+            "学習優先度": config.get("weight", 1),
+        })
+    target_df = pd.DataFrame(
+        target_rows, columns=["科目", "目標点", "満点", "学習優先度"]
+    )
+
+    profile_rows = [
+        {"項目": "受験モード", "内容": "大学受験" if get_exam_mode() == "university" else "高校受験"},
+        {"項目": "志望大学", "内容": university.get("university_name", "")},
+        {"項目": "学部", "内容": university.get("faculty", "")},
+        {"項目": "学科", "内容": university.get("department", "")},
+        {"項目": "入試方式", "内容": university.get("admission_method", "")},
+    ]
+    if isinstance(profile, dict):
+        for key, value in profile.items():
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                profile_rows.append({"項目": str(key), "内容": value})
+    profile_df = pd.DataFrame(profile_rows)
+
+    unit_rows = []
+    if not questions_df.empty:
+        for (subject, unit), group in questions_df.groupby(["subject", "unit"], sort=True):
+            complete_points = (
+                group["points"].notna().all()
+                and group["earned_points"].notna().all()
+                and float(group["points"].sum()) > 0
+            )
+            if complete_points:
+                accuracy = float(group["earned_points"].sum() / group["points"].sum() * 100)
+                method = "配点ベース"
+            else:
+                accuracy = float(group["correct"].mean() * 100)
+                method = "正答数ベース"
+            unit_rows.append({
+                "科目": subject, "単元": unit, "問題数": int(len(group)),
+                "正答率・得点率": round(accuracy, 1), "集計方法": method,
+            })
+    unit_analysis = pd.DataFrame(
+        unit_rows, columns=["科目", "単元", "問題数", "正答率・得点率", "集計方法"]
+    )
+
+    for frame in (subject_analysis, exam_type_analysis, target_df, profile_df, unit_analysis):
         for column in frame.select_dtypes(include=["object"]).columns:
             frame[column] = frame[column].map(safe_excel_text)
 
@@ -1086,11 +1185,24 @@ def report():
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         scores_df.to_excel(writer, sheet_name="成績データ", index=False)
         questions_df.to_excel(writer, sheet_name="問題別データ", index=False)
-        if not scores_df.empty:
-            scores_df["得点率"] = scores_df["score"] / scores_df["max_score"] * 100
-            scores_df.groupby("subject")["得点率"].agg(
-                ["count", "mean", "max", "min"]
-            ).round(1).to_excel(writer, sheet_name="科目分析")
+        subject_analysis.to_excel(writer, sheet_name="科目分析", index=False)
+        exam_type_analysis.to_excel(writer, sheet_name="試験種別分析", index=False)
+        target_df.to_excel(writer, sheet_name="科目別目標", index=False)
+        profile_df.to_excel(writer, sheet_name="志望情報", index=False)
+        unit_analysis.to_excel(writer, sheet_name="単元分析", index=False)
+
+        for worksheet in writer.book.worksheets:
+            worksheet.freeze_panes = "A2"
+            worksheet.auto_filter.ref = worksheet.dimensions
+            for column_cells in worksheet.columns:
+                max_length = max(
+                    (len(str(cell.value)) for cell in column_cells if cell.value is not None),
+                    default=0,
+                )
+                worksheet.column_dimensions[column_cells[0].column_letter].width = min(
+                    max(max_length + 2, 10), 40
+                )
+
     output.seek(0)
     return StreamingResponse(
         output,

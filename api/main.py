@@ -1160,12 +1160,25 @@ def parse_import_table(content: bytes, filename: str) -> tuple[list[dict[str, An
 
     for row_number, (_, row) in enumerate(frame.iterrows(), start=2):
         try:
+            row_warnings = []
             date_value = row.get("date")
-            date_text = date.today().isoformat() if missing(date_value) else str(date_value)[:10]
+            if missing(date_value):
+                date_text = date.today().isoformat()
+                row_warnings.append("試験日が空欄のため今日の日付を設定しました")
+            else:
+                date_text = str(date_value)[:10]
             exam_value = row.get("exam_name")
-            exam_name = default_name if missing(exam_value) or not str(exam_value).strip() else str(exam_value).strip()
+            if missing(exam_value) or not str(exam_value).strip():
+                exam_name = default_name
+                row_warnings.append("試験名が空欄のためファイル名を設定しました")
+            else:
+                exam_name = str(exam_value).strip()
             exam_type_value = row.get("exam_type")
-            exam_type = "模試" if missing(exam_type_value) or not str(exam_type_value).strip() else str(exam_type_value).strip()
+            if missing(exam_type_value) or not str(exam_type_value).strip():
+                exam_type = "模試"
+                row_warnings.append("試験種別が空欄のため「模試」を設定しました")
+            else:
+                exam_type = str(exam_type_value).strip()
             payload = Score(
                 date=date_text,
                 exam_name=exam_name,
@@ -1177,7 +1190,11 @@ def parse_import_table(content: bytes, filename: str) -> tuple[list[dict[str, An
                 rank=optional_number(row, "rank", integer=True),
                 examinees=optional_number(row, "examinees", integer=True),
             )
-            parsed.append({"row": row_number, "data": payload.model_dump()})
+            parsed.append({
+                "row": row_number,
+                "data": payload.model_dump(),
+                "warnings": row_warnings,
+            })
         except Exception as error:
             errors.append({"row": row_number, "error": str(error)[:300]})
 
@@ -1279,6 +1296,7 @@ async def preview_import_table(file: UploadFile = File(...)):
             "row": item["row"],
             "data": item["data"],
             "duplicate": duplicate,
+            "warnings": item["warnings"],
         })
 
     return {

@@ -1238,3 +1238,39 @@ def test_excel_report_escapes_formula_like_user_text(tmp_path, monkeypatch):
         cell = workbook["問題別データ"]["E2"]
         assert cell.data_type == "s"
         assert cell.value.startswith("'=")
+
+
+def test_ocr_confirm_preserves_university_exam_type_and_subject(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        headers = {"X-Exam-Mode": "university"}
+        response = client.post("/api/import/ocr-confirm", headers=headers, json={
+            "scores": [{
+                "date": "2026-11-04",
+                "exam_name": "共通テスト模試",
+                "exam_type": "共通テスト",
+                "subject": "数学IA",
+                "score": 80,
+                "max_score": 100,
+            }]
+        })
+        assert response.status_code == 200
+        assert response.json()["imported"] == 1
+        saved = client.get("/api/scores", headers=headers).json()
+        assert saved[0]["subject"] == "数学IA"
+        assert saved[0]["exam_type"] == "共通テスト"
+
+
+def test_ocr_preview_passes_exam_mode_to_candidate_parser(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        monkeypatch.setattr(
+            api,
+            "preview_pdf_ocr",
+            lambda content, mode: {"mode": mode, "candidates": []},
+        )
+        response = client.post(
+            "/api/import/pdf/ocr-preview",
+            headers={"X-Exam-Mode": "university"},
+            files={"file": ("scores.pdf", b"fake-pdf", "application/pdf")},
+        )
+        assert response.status_code == 200
+        assert response.json()["mode"] == "university"

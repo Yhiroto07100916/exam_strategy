@@ -149,6 +149,47 @@ def test_unit_trends_keep_common_test_and_past_papers_separate(tmp_path, monkeyp
         assert {row["accuracy"] for row in trends} == {0.0, 100.0}
 
 
+def test_settings_reject_invalid_target_subjects_and_scores(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        assert client.put("/api/settings", json={
+            "profile": {},
+            "target": {"subjects": {"情報I": {"target_score": 70, "max_score": 100}}},
+        }).status_code == 422
+
+        assert client.put("/api/settings", json={
+            "profile": {},
+            "target": {"subjects": {"数学": {"target_score": 110, "max_score": 100}}},
+        }).status_code == 422
+
+        assert client.put("/api/settings", json={
+            "profile": {},
+            "target": {"subjects": {"数学": {"target_score": 50, "max_score": float("inf")}}},
+        }).status_code == 422
+
+        valid = client.put("/api/settings", json={
+            "profile": {},
+            "target": {"subjects": {"数学": {"target_score": 75, "max_score": 100}}},
+        })
+        assert valid.status_code == 200
+
+
+def test_university_settings_accept_university_subject_targets(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        response = client.put("/api/settings", headers={"X-Exam-Mode": "university"}, json={
+            "profile": {},
+            "target": {
+                "university": {
+                    "university_name": "志望大学",
+                    "faculty": "理工学部",
+                    "department": "情報系",
+                    "admission_method": "一般選抜",
+                },
+                "subjects": {"情報I": {"target_score": 80, "max_score": 100}},
+            },
+        })
+        assert response.status_code == 200
+
+
 def test_target_gap_normalizes_scores_to_configured_maximum(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         headers = {"X-Exam-Mode": "university"}

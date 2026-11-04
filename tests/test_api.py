@@ -1172,3 +1172,38 @@ def test_analysis_separates_university_exam_types_by_subject(tmp_path, monkeypat
         assert individual["count"] == 1
         assert individual["average_rate"] == 55.0
         assert client.get("/api/analysis").json()["exam_type_summary"] == []
+
+
+def test_university_ocr_candidates_use_university_subject_names():
+    from api.ocr import parse_ocr_candidates
+
+    candidates = parse_ocr_candidates([
+        "英語リーディング 82/100\n"
+        "数学IA 75/100\n"
+        "数学IIBC 68/100\n"
+        "物理 71/100\n"
+        "情報I 88/100"
+    ], mode="university")
+
+    assert [item["subject"] for item in candidates] == [
+        "英語リーディング", "数学IA", "数学IIBC", "物理", "情報I"
+    ]
+    assert [item["score_candidate"] for item in candidates] == [82, 75, 68, 71, 88]
+
+
+def test_high_school_ocr_candidates_keep_high_school_subjects():
+    from api.ocr import parse_ocr_candidates
+
+    candidates = parse_ocr_candidates(["数学 75/100\n英語 80/100"])
+    assert [item["subject"] for item in candidates] == ["数学", "英語"]
+
+
+def test_pdf_text_preview_rejects_oversized_files(tmp_path, monkeypatch):
+    from api.ocr import MAX_PDF_BYTES
+
+    with make_client(tmp_path, monkeypatch) as client:
+        response = client.post(
+            "/api/import/pdf",
+            files={"file": ("large.pdf", b"x" * (MAX_PDF_BYTES + 1), "application/pdf")},
+        )
+        assert response.status_code == 413

@@ -262,6 +262,19 @@ class OCRConfirmRequest(BaseModel):
 
 
 
+class BackupRestoreRequest(BaseModel):
+    format_version: int
+    exam_mode: str
+    confirm_replace: bool = False
+    exported_at: str
+    scores: list[dict[str, Any]] = Field(default_factory=list, max_length=50000)
+    questions: list[dict[str, Any]] = Field(default_factory=list, max_length=100000)
+    settings: dict[str, Any] = Field(default_factory=dict)
+    schools: list[dict[str, Any]] = Field(default_factory=list, max_length=5000)
+    school_rules: list[dict[str, Any]] = Field(default_factory=list, max_length=20000)
+
+
+
 class SchoolCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -527,6 +540,208 @@ def put_settings(item: Settings):
     finally:
         connection.close()
     return values
+
+
+@app.get("/api/backup")
+def export_backup():
+    connection = db()
+    try:
+        backup = {
+            "format_version": 1,
+            "exam_mode": get_exam_mode(),
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "scores": [dict(row) for row in connection.execute(
+                "SELECT * FROM scores ORDER BY date, created_at"
+            ).fetchall()],
+            "questions": [dict(row) for row in connection.execute(
+                "SELECT * FROM questions ORDER BY date, exam_name, subject, unit"
+            ).fetchall()],
+            "settings": {
+                row["key"]: json.loads(row["value"])
+                for row in connection.execute("SELECT key, value FROM settings").fetchall()
+            },
+            "schools": [dict(row) for row in connection.execute(
+                "SELECT * FROM schools ORDER BY prefecture, name"
+            ).fetchall()],
+            "school_rules": [
+                {**dict(row), "rule_data": json.loads(row["rule_data"])}
+                for row in connection.execute(
+                    "SELECT * FROM school_rules ORDER BY admission_year, selection_type"
+                ).fetchall()
+            ],
+        }
+    finally:
+        connection.close()
+    payload = json.dumps(backup, ensure_ascii=False, indent=2).encode("utf-8")
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type="application/json; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="exam_strategy_backup.json"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.post("/api/backup/restore")
+def restore_backup(backup: BackupRestoreRequest, request: Request):
+    if request.headers.get("content-length") and int(request.headers["content-length"]) > 20 * 1024 * 1024:
+        raise HTTPException(413, "バックアップファイルは20MB以下にしてください")
+    if backup.format_version != 1:
+        raise HTTPException(422, "対応していないバックアップ形式です")
+    if backup.exam_mode != get_exam_mode():
+        raise HTTPException(409, "バックアップの受験モードが現在のモードと異なります")
+    if backup.confirm_replace is not True:
+        raise HTTPException(400, "既存データを置き換える確認が必要です")
+
+    try:
+        score_items = []
+        for raw in backup.scores:
+            item = Score.model_validate(raw)
+            data = item.model_dump()
+            data["id"] = str(raw["id"])
+            data["created_at"] = str(raw["created_at"])
+            score_items.append(data)
+
+        question_items = []
+        for raw in backup.questions:
+            item = Question.model_validate({
+                **raw,
+                "correct": bool(raw["correct"]),
+            })
+            data = item.model_dump()
+            data["correct"] = int(data["correct"])
+            data["id"] = str(raw["id"])
+            question_items.append(data)
+
+        school_items = []
+        for raw in backup.schools:
+            item = SchoolCreate.model_validate({
+                "name": raw["name"],
+                "prefecture": raw["prefecture"],
+                "school_type": raw["school_type"],
+            })
+            school_items.append({
+                **item.model_dump(),
+                "id": str(raw["id"]),
+                "created_at": str(raw["created_at"]),
+                "updated_at": str(raw["updated_at"]),
+            })
+
+        school_ids = {item["id"] for item in school_items}
+        if len(school_ids) != len(school_items):
+            raise ValueError("学校IDが重複しています")
+
+        school_rule_items = []
+        for raw in backup.school_rules:
+            if str(raw["school_id"]) not in school_ids:
+                raise ValueError("選抜ルールの参照先学校が存在しません")
+            item = SchoolRuleInput.model_validate({
+                "admission_year": raw["admission_year"],
+                "course": raw["course"],
+                "selection_type": raw["selection_type"],
+                "verification_status": raw["verification_status"],
+                "official_source_url": raw.get("official_source_url"),
+                "verified_on": raw.get("verified_on"),
+                "rule_data": raw.get("rule_data", {}),
+                "notes": raw.get("notes", ""),
+            })
+            school_rule_items.append({
+                **item.model_dump(),
+                "id": str(raw["id"]),
+                "school_id": str(raw["school_id"]),
+                "rule_data": json.dumps(item.rule_data, ensure_ascii=False),
+                "created_at": str(raw["created_at"]),
+                "updated_at": str(raw["updated_at"]),
+            })
+
+        settings_item = Settings.model_validate({
+            "profile": backup.settings.get("profile", {}),
+            "target": backup.settings.get("target", {}),
+        })
+        if len({item["id"] for item in score_items}) != len(score_items):
+            raise ValueError("成績IDが重複しています")
+        if len({item["id"] for item in question_items}) != len(question_items):
+            raise ValueError("問題データIDが重複しています")
+        if len({item["id"] for item in school_rule_items}) != len(school_rule_items):
+            raise ValueError("選抜ルールIDが重複しています")
+        if len({
+            (item["date"], item["exam_name"], item["exam_type"], item["subject"])
+            for item in score_items
+        }) != len(score_items):
+            raise ValueError("同じ試験・科目の成績が重複しています")
+    except (KeyError, TypeError, ValueError, ValidationError) as error:
+        raise HTTPException(422, f"バックアップの内容が不正です: {error}")
+
+    connection = db()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("DELETE FROM school_rules")
+        connection.execute("DELETE FROM schools")
+        connection.execute("DELETE FROM questions")
+        connection.execute("DELETE FROM scores")
+        connection.execute("DELETE FROM settings")
+
+        for item in score_items:
+            connection.execute(
+                f"INSERT INTO scores ({','.join(SCORE_COLUMNS)}) VALUES ({','.join('?' for _ in SCORE_COLUMNS)})",
+                tuple(item[key] for key in SCORE_COLUMNS),
+            )
+        for item in question_items:
+            connection.execute(
+                """INSERT INTO questions (
+                    id, date, exam_name, subject, unit, correct, points,
+                    earned_points, exam_type
+                ) VALUES (?,?,?,?,?,?,?,?,?)""",
+                tuple(item[key] for key in [
+                    "id", "date", "exam_name", "subject", "unit", "correct",
+                    "points", "earned_points", "exam_type",
+                ]),
+            )
+        for key, value in settings_item.model_dump().items():
+            connection.execute(
+                "INSERT INTO settings(key, value) VALUES(?, ?)",
+                (key, json.dumps(value, ensure_ascii=False)),
+            )
+        for item in school_items:
+            connection.execute(
+                "INSERT INTO schools VALUES(?,?,?,?,?,?)",
+                tuple(item[key] for key in [
+                    "id", "name", "prefecture", "school_type", "created_at", "updated_at",
+                ]),
+            )
+        for item in school_rule_items:
+            connection.execute(
+                """INSERT INTO school_rules (
+                    id, school_id, admission_year, course, selection_type,
+                    verification_status, official_source_url, verified_on,
+                    rule_data, notes, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                tuple(item[key] for key in [
+                    "id", "school_id", "admission_year", "course", "selection_type",
+                    "verification_status", "official_source_url", "verified_on",
+                    "rule_data", "notes", "created_at", "updated_at",
+                ]),
+            )
+        connection.commit()
+    except sqlite3.IntegrityError as error:
+        connection.rollback()
+        raise HTTPException(422, f"バックアップ内のデータに整合性エラーがあります: {error}")
+    except Exception:
+        connection.rollback()
+        raise HTTPException(500, "復元に失敗しました。既存データは変更されていません")
+    finally:
+        connection.close()
+
+    return {
+        "restored": {
+            "scores": len(score_items),
+            "questions": len(question_items),
+            "schools": len(school_items),
+            "school_rules": len(school_rule_items),
+        },
+        "exam_mode": get_exam_mode(),
+    }
 
 
 @app.get("/api/analysis")

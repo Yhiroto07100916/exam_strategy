@@ -848,7 +848,7 @@ def test_exam_modes_keep_score_and_question_data_separate(tmp_path, monkeypatch)
         ).status_code == 422
         assert client.post(
             "/api/scores",
-            json={**university_score, "subject": "数学"},
+            json={**university_score, "subject": "数学IIBC"},
             headers=university_headers,
         ).status_code == 201
 

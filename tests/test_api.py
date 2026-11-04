@@ -217,7 +217,7 @@ def test_existing_question_table_is_migrated_without_losing_rows(tmp_path, monke
         assert rows[0]["id"] == "before-migration"
         assert rows[0]["exam_type"] == "模試"
         columns = {
-            row["name"] for row in sqlite3.connect(database).execute(
+            row[1] for row in sqlite3.connect(database).execute(
                 "PRAGMA table_info(questions)"
             ).fetchall()
         }

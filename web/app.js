@@ -33,12 +33,13 @@ const start=importPage*pageSize;
 const visible=records.slice(start,start+pageSize);
 const selectedCount=records.filter(item=>item.selected&&!item.duplicate).length;
 const validCount=records.filter(item=>!item.duplicate).length;
-let html='<p class="note">'+importPreview.total_rows+'行中、有効な登録候補 '+validCount+'件 / 重複 '+importPreview.duplicates+'件 / 入力エラー '+importPreview.errors.length+'件。重複行は選択できません。</p>';
+const warningCount=records.filter(item=>(item.warnings||[]).length>0).length;
+let html='<p class="note">'+importPreview.total_rows+'行中、有効な登録候補 '+validCount+'件 / 重複 '+importPreview.duplicates+'件 / 自動補完の確認 '+warningCount+'件 / 入力エラー '+importPreview.errors.length+'件。重複行は選択できず、自動補完した行は確認後に選択してください。</p>';
 if(records.length){
-html+='<div class="table import-table"><table><thead><tr><th>登録</th><th>行</th><th>試験日</th><th>試験名</th><th>試験種別</th><th>科目</th><th>得点</th><th>偏差値</th><th>順位</th><th>受験者数</th><th>状態</th></tr></thead><tbody>';
+html+='<div class="table import-table"><table><thead><tr><th>登録</th><th>行</th><th>試験日</th><th>試験名</th><th>試験種別</th><th>科目</th><th>得点</th><th>偏差値</th><th>順位</th><th>受験者数</th><th>状態・確認事項</th></tr></thead><tbody>';
 html+=visible.map((item,offset)=>{
 const index=start+offset,data=item.data;
-return '<tr><td><input type="checkbox" data-import-index="'+index+'" '+(item.selected?'checked ':'')+(item.duplicate?'disabled':'')+' aria-label="行 '+item.row+'を登録"></td><td>'+item.row+'</td><td>'+esc(data.date)+'</td><td>'+esc(data.exam_name)+'</td><td>'+esc(data.exam_type)+'</td><td>'+esc(data.subject)+'</td><td>'+esc(data.score)+' / '+esc(data.max_score)+'</td><td>'+esc(data.deviation??'')+'</td><td>'+esc(data.rank??'')+'</td><td>'+esc(data.examinees??'')+'</td><td>'+(item.duplicate?'重複':'登録候補')+'</td></tr>';
+return '<tr><td><input type="checkbox" data-import-index="'+index+'" '+(item.selected?'checked ':'')+(item.duplicate?'disabled':'')+' aria-label="行 '+item.row+'を登録"></td><td>'+item.row+'</td><td>'+esc(data.date)+'</td><td>'+esc(data.exam_name)+'</td><td>'+esc(data.exam_type)+'</td><td>'+esc(data.subject)+'</td><td>'+esc(data.score)+' / '+esc(data.max_score)+'</td><td>'+esc(data.deviation??'')+'</td><td>'+esc(data.rank??'')+'</td><td>'+esc(data.examinees??'')+'</td><td>'+(item.duplicate?'重複':(item.warnings||[]).length?'要確認':'登録候補')+((item.warnings||[]).length?'<br><span class="note">'+esc(item.warnings.join(' / '))+'</span>':'')+'</td></tr>';
 }).join('');
 html+='</tbody></table></div>';
 html+='<div class="import-pagination"><button type="button" data-import-page="-1" '+(importPage===0?'disabled':'')+'>前へ</button><span>ページ '+(importPage+1)+' / '+pageCount+'・選択 '+selectedCount+'件</span><button type="button" data-import-page="1" '+(importPage>=pageCount-1?'disabled':'')+'>次へ</button></div>';
@@ -75,9 +76,9 @@ $('#upload').disabled=true;$('#upload-result').textContent='プレビューを�
 importPreview=null;renderImportPreview();
 try{
 const result=await api('/import/table/preview',{method:'POST',body:data});
-importPreview={...result,records:result.records.map(item=>({...item,selected:!item.duplicate}))};
+importPreview={...result,records:result.records.map(item=>({...item,selected:!item.duplicate&&!(item.warnings||[]).length}))};
 importPage=0;renderImportPreview();
-$('#upload-result').textContent='登録する行を確認し、必要に応じて選択を外してください。';
+$('#upload-result').textContent='登録する行を確認してください。自動補完された行は未選択なので、内容を確認してから選択してください。';
 }catch(error){
 $('#upload-result').textContent=error.message;
 }finally{$('#upload').disabled=false}

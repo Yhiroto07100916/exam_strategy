@@ -138,3 +138,21 @@ toast('復元しました：成績 '+result.restored.scores+'件 / 問題 '+resu
 await refresh();
 }catch(error){toast(error.message)}
 };
+
+
+$('#excel-report-download').onclick=async()=>{
+try{
+const response=await fetch('/api/reports/excel',{headers:{'X-Exam-Mode':examMode}});
+if(!response.ok){let detail='Excelレポートを作成できませんでした';try{detail=(await response.json()).detail||detail}catch{}throw Error(detail)}
+const blob=await response.blob();
+const url=URL.createObjectURL(blob);
+const link=document.createElement('a');
+link.href=url;
+link.download='exam_strategy_report_'+examMode+'.xlsx';
+document.body.appendChild(link);
+link.click();
+link.remove();
+URL.revokeObjectURL(url);
+toast('Excelレポートをダウンロードしました');
+}catch(error){toast(error.message)}
+};

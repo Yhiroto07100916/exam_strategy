@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 WEB = ROOT / "web"
 DB = DATA / "exam_strategy.sqlite3"
-from .main_models import SUBJECTS, is_valid_subject
+from .main_models import is_valid_subject
 from .exam_mode import EXAM_MODES, exam_mode_context, get_exam_mode
 from .target_routes import router as target_router
 from .school_targeting import SchoolScoringModel, SchoolTargetAllocationRequest, allocate_school_targets
@@ -179,7 +179,7 @@ class Question(BaseModel):
     @field_validator("subject")
     @classmethod
     def validate_subject(cls, value: str) -> str:
-        if value not in SUBJECTS:
+        if not is_valid_subject(value):
             raise ValueError("科目は国語・数学・英語・理科・社会から選択してください")
         return value
 

@@ -173,6 +173,7 @@ def test_unit_trends_are_separated_by_exam_and_ignore_undated_legacy_rows(
         assert trends[0] == {
             "date": "2026-10-01",
             "exam_name": "10月模試",
+            "exam_type": "模試",
             "subject": "数学",
             "unit": "二次関数",
             "questions": 2,

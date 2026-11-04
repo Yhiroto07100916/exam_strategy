@@ -22,7 +22,24 @@ if(!Number.isFinite(maxScore)||maxScore<=0||(targetScore!==null&&(!Number.isFini
 target.subjects[s]={target_score:targetScore,max_score:maxScore,weight:1};
 });
 if(invalidTargets.length)return toast('目標点・満点を確認してください：'+invalidTargets.join('、'));
-try{await api('/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile:settings.profile||{},target})});await refresh();toast('目標を保存しました')}catch(x){toast(x.message)}};$('#upload').onclick=async()=>{let f=$('#table-file').files[0];if(!f)return toast('ファイルを選択してください');let d=new FormData();d.append('file',f);try{let r=await api('/import/table',{method:'POST',body:d});$('#upload-result').textContent=r.imported+'件登録 / 重複 '+(r.duplicates||0)+'件 / エラー '+r.errors.length+'件';await refresh()}catch(x){toast(x.message)}};$('#pdf').onclick=async()=>{let f=$('#pdf-file').files[0];if(!f)return toast('PDFを選択してください');let d=new FormData();d.append('file',f);try{let r=await api('/import/pdf',{method:'POST',body:d});$('#pdf-text').value=r.text;toast(r.needs_ocr?'画像PDFです。OCRが必要です。':'読み取りました')}catch(x){toast(x.message)}};refresh().catch(e=>toast('API接続エラー：'+e.message));
+try{await api('/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile:settings.profile||{},target})});await refresh();toast('目標を保存しました')}catch(x){toast(x.message)}};$('#upload').onclick=async()=>{
+const file=$('#table-file').files[0];
+if(!file)return toast('ファイルを選択してください');
+const data=new FormData();
+data.append('file',file);
+$('#upload').disabled=true;
+$('#upload-result').textContent='取り込み中...';
+try{
+const result=await api('/import/table',{method:'POST',body:data});
+const summary=result.total_rows+'行中 '+result.imported+'件登録 / 重複 '+result.duplicates+'件 / エラー '+result.errors.length+'件';
+const errorDetails=result.errors.slice(0,20).map(item=>'行 '+item.row+': '+item.error).join('\\n');
+$('#upload-result').textContent=summary+(errorDetails?'\\n'+errorDetails:'')+(result.errors.length>20?'\\nほか '+(result.errors.length-20)+'件のエラー':'');
+await refresh();
+}catch(error){
+$('#upload-result').textContent=error.message;
+}catch(error){}
+finally{$('#upload').disabled=false}
+};$('#pdf').onclick=async()=>{let f=$('#pdf-file').files[0];if(!f)return toast('PDFを選択してください');let d=new FormData();d.append('file',f);try{let r=await api('/import/pdf',{method:'POST',body:d});$('#pdf-text').value=r.text;toast(r.needs_ocr?'画像PDFです。OCRが必要です。':'読み取りました')}catch(x){toast(x.message)}};refresh().catch(e=>toast('API接続エラー：'+e.message));
 $('#question-form').onsubmit=async e=>{e.preventDefault();const form=e.target;let d=Object.fromEntries(new FormData(form));const id=d.id;delete d.id;d.correct=d.correct==='true';['points','earned_points'].forEach(k=>d[k]=d[k]===''?null:Number(d[k]));try{await api(id?'/questions/'+id:'/questions',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});form.reset();$('#question-submit').textContent='問題データを追加';$('#question-cancel').hidden=true;await refresh();toast(id?'問題データを更新しました':'問題データを保存しました')}catch(x){toast(x.message)}};$('#question-rows').onclick=async e=>{const editId=e.target.dataset.editQuestionId;if(editId){const item=questions.find(x=>x.id===editId);if(!item)return;const form=$('#question-form');['date','exam_name','exam_type','subject','unit','points','earned_points'].forEach(k=>form.elements[k].value=item[k]??(k==='exam_type'?'模試':''));form.elements.correct.value=String(Boolean(item.correct));form.elements.id.value=item.id;$('#question-submit').textContent='変更を保存';$('#question-cancel').hidden=false;return}const id=e.target.dataset.questionId;if(!id)return;if(confirm('この問題データを削除しますか？')){try{await api('/questions/'+id,{method:'DELETE'});await refresh()}catch(x){toast(x.message)}}};$('#question-cancel').onclick=()=>{$('#question-form').reset();$('#question-submit').textContent='問題データを追加';$('#question-cancel').hidden=true};
 
 $('#allocation-form').onsubmit=async e=>{

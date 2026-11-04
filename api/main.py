@@ -1116,7 +1116,7 @@ async def import_table(file: UploadFile = File(...)):
         raise HTTPException(400, "ファイルを読み込めません。形式や内容を確認してください")
 
     normalized_columns = [
-        str(column).replace("\\ufeff", "").strip()
+        str(column).replace("\ufeff", "").strip()
         for column in frame.columns
     ]
     if len(normalized_columns) != len(set(normalized_columns)):

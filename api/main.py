@@ -230,7 +230,7 @@ class Settings(BaseModel):
                     raise ValueError(f"{subject}の{field_name}は数値で指定してください")
                 try:
                     number = float(field_value)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     raise ValueError(f"{subject}の{field_name}は数値で指定してください")
                 if not math.isfinite(number):
                     raise ValueError(f"{subject}の{field_name}は有限の数値で指定してください")

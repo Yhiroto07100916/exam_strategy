@@ -1452,3 +1452,49 @@ def test_invalid_backup_does_not_replace_existing_data(tmp_path, monkeypatch):
         scores = client.get("/api/scores").json()
         assert len(scores) == 1
         assert scores[0]["exam_name"] == "保持する模試"
+
+
+
+def test_csv_import_normalizes_headers_and_preserves_exam_type(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        csv_data = (
+            " date , exam_name , exam_type , subject , score , max_score \n"
+            "2026-10-02,共通テスト演習,共通テスト,数学IA,78,100\n"
+        )
+        response = client.post(
+            "/api/import/table",
+            headers={"X-Exam-Mode": "university"},
+            files={"file": ("university.csv", csv_data.encode("utf-8-sig"), "text/csv")},
+        )
+        assert response.status_code == 200
+        assert response.json()["total_rows"] == 1
+        assert response.json()["imported"] == 1
+        saved = client.get("/api/scores", headers={"X-Exam-Mode": "university"}).json()
+        assert saved[0]["subject"] == "数学IA"
+        assert saved[0]["exam_type"] == "共通テスト"
+
+
+def test_csv_import_rejects_duplicate_normalized_headers(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        csv_data = "subject, subject ,score,max_score\n数学,英語,70,100\n"
+        response = client.post(
+            "/api/import/table",
+            files={"file": ("duplicate.csv", csv_data.encode("utf-8"), "text/csv")},
+        )
+        assert response.status_code == 422
+        assert "重複" in response.json()["detail"]
+        assert client.get("/api/scores").json() == []
+
+
+def test_csv_import_rejects_more_than_row_limit(tmp_path, monkeypatch):
+    from api.main import MAX_IMPORT_ROWS
+
+    with make_client(tmp_path, monkeypatch) as client:
+        lines = ["subject,score,max_score"]
+        lines.extend(["数学,50,100"] * (MAX_IMPORT_ROWS + 1))
+        response = client.post(
+            "/api/import/table",
+            files={"file": ("many.csv", ("\n".join(lines)).encode("utf-8"), "text/csv")},
+        )
+        assert response.status_code == 413
+        assert client.get("/api/scores").json() == []

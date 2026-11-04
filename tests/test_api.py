@@ -408,8 +408,25 @@ def test_csv_import_preview_does_not_write_and_marks_file_duplicates(tmp_path, m
         assert [item["row"] for item in result["records"]] == [2, 3]
         assert [item["duplicate"] for item in result["records"]] == [False, True]
         assert result["records"][0]["data"]["subject"] == "国語"
+        assert result["records"][0]["warnings"] == []
         assert result["errors"][0]["row"] == 4
         assert client.get("/api/scores").json() == []
+
+
+def test_csv_import_preview_marks_automatically_filled_fields_for_review(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        csv_data = "subject,score,max_score\\n国語,68,100\\n"
+        response = client.post(
+            "/api/import/table/preview",
+            files={"file": ("scores.csv", csv_data.encode("utf-8-sig"), "text/csv")},
+        )
+
+        assert response.status_code == 200
+        record = response.json()["records"][0]
+        assert record["data"]["date"]
+        assert record["data"]["exam_name"] == "scores"
+        assert record["data"]["exam_type"] == "模試"
+        assert len(record["warnings"]) == 3
 
 
 def test_csv_import_confirm_rechecks_duplicates_and_imports_selected_rows(tmp_path, monkeypatch):

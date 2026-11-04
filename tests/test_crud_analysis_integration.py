@@ -61,6 +61,7 @@ def test_score_edit_and_delete_refresh_analysis(tmp_path, monkeypatch):
         assert client.delete(f"/api/scores/{first_id}").status_code == 204
         assert client.get("/api/analysis").json() == {
             "summary": [],
+            "exam_type_summary": [],
             "weak_units": [],
             "unit_trends": [],
             "latest_exam": None,

@@ -41,6 +41,50 @@ def test_score_crud_and_validation(tmp_path, monkeypatch):
         assert client.delete(f"/api/scores/{item_id}").status_code == 404
 
 
+
+def test_subject_latest_score_is_ambiguous_for_multiple_exams_on_same_date(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        for exam_name, score in [("模試A", 72), ("模試B", 88)]:
+            response = client.post("/api/scores", json={
+                "date": "2026-10-01",
+                "exam_name": exam_name,
+                "exam_type": "模試",
+                "subject": "数学",
+                "score": score,
+                "max_score": 100,
+            })
+            assert response.status_code == 201
+
+        result = client.get("/api/analysis").json()
+        subject = next(item for item in result["summary"] if item["subject"] == "数学")
+        assert subject["latest_ambiguous"] is True
+        assert subject["latest_date"] == "2026-10-01"
+        assert subject["latest_score"] is None
+        assert subject["latest_max"] is None
+        assert subject["latest_rate"] is None
+        assert subject["latest_deviation"] is None
+        assert result["target_gaps"] == []
+
+
+def test_subject_latest_score_remains_available_for_one_exam_with_multiple_subjects(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        for subject, score in [("数学", 72), ("英語", 81)]:
+            response = client.post("/api/scores", json={
+                "date": "2026-10-01",
+                "exam_name": "10月模試",
+                "exam_type": "模試",
+                "subject": subject,
+                "score": score,
+                "max_score": 100,
+            })
+            assert response.status_code == 201
+
+        result = client.get("/api/analysis").json()
+        math = next(item for item in result["summary"] if item["subject"] == "数学")
+        assert math["latest_ambiguous"] is False
+        assert math["latest_score"] == 72
+        assert math["latest_rate"] == 72
+
 def test_latest_exam_is_not_mixed_with_other_exam_on_same_date(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as client:
         for exam, subject, score in [

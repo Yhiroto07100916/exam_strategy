@@ -186,3 +186,24 @@ def test_unit_trends_are_separated_by_exam_and_ignore_undated_legacy_rows(
 
         # Legacy rows without an exam/date remain in the overall unit aggregate.
         assert result["weak_units"][0]["questions"] == 4
+
+
+def test_unit_trends_keep_same_day_exams_separate(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        for exam_name, earned in [("午前模試", 8), ("午後模試", 4)]:
+            response = client.post("/api/questions", json={
+                "date": "2026-11-01",
+                "exam_name": exam_name,
+                "exam_type": "模試",
+                "subject": "数学",
+                "unit": "二次関数",
+                "correct": earned > 0,
+                "points": 10,
+                "earned_points": earned,
+            })
+            assert response.status_code == 201
+
+        trends = client.get("/api/analysis").json()["unit_trends"]
+        assert len(trends) == 2
+        assert {item["exam_name"] for item in trends} == {"午前模試", "午後模試"}
+        assert {item["accuracy"] for item in trends} == {40.0, 80.0}

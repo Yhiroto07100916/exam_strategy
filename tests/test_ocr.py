@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
 import fitz
+import pytest
+
 from fastapi.testclient import TestClient
 
 import api.main as api

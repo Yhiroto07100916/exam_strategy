@@ -1749,6 +1749,8 @@ def test_weak_units_keep_exam_types_separate(tmp_path, monkeypatch):
         }
         assert breakdown["共通テスト"]["accuracy"] == 0.0
         assert breakdown["過去問"]["accuracy"] == 100.0
+        assert breakdown["共通テスト"]["questions"] == 1
+        assert breakdown["過去問"]["questions"] == 1
         assert all(row["subject"] == "英語リーディング" for row in weak_units)
         assert all(row["unit"] == "長文読解" for row in weak_units)
 

@@ -1506,7 +1506,9 @@ def report():
 
     unit_rows = []
     if not questions_df.empty:
-        for (subject, unit), group in questions_df.groupby(["subject", "unit"], sort=True):
+        for (exam_type, subject, unit), group in questions_df.groupby(
+            ["exam_type", "subject", "unit"], sort=True
+        ):
             complete_points = (
                 group["points"].notna().all()
                 and group["earned_points"].notna().all()
@@ -1519,11 +1521,13 @@ def report():
                 accuracy = float(group["correct"].mean() * 100)
                 method = "正答数ベース"
             unit_rows.append({
-                "科目": subject, "単元": unit, "問題数": int(len(group)),
+                "試験種別": exam_type, "科目": subject, "単元": unit,
+                "問題数": int(len(group)),
                 "正答率・得点率": round(accuracy, 1), "集計方法": method,
             })
     unit_analysis = pd.DataFrame(
-        unit_rows, columns=["科目", "単元", "問題数", "正答率・得点率", "集計方法"]
+        unit_rows,
+        columns=["試験種別", "科目", "単元", "問題数", "正答率・得点率", "集計方法"],
     )
 
     for frame in (subject_analysis, exam_type_analysis, target_df, profile_df, unit_analysis):

@@ -637,6 +637,9 @@ def restore_backup(backup: BackupRestoreRequest, request: Request):
         school_ids = {item["id"] for item in school_items}
         if len(school_ids) != len(school_items):
             raise ValueError("学校IDが重複しています")
+        school_keys = [(item["prefecture"], item["name"]) for item in school_items]
+        if len(set(school_keys)) != len(school_keys):
+            raise ValueError("同じ都県・学校名の学校が重複しています")
 
         school_rule_items = []
         for raw in backup.school_rules:
@@ -671,6 +674,12 @@ def restore_backup(backup: BackupRestoreRequest, request: Request):
             raise ValueError("問題データIDが重複しています")
         if len({item["id"] for item in school_rule_items}) != len(school_rule_items):
             raise ValueError("選抜ルールIDが重複しています")
+        school_rule_keys = [
+            (item["school_id"], item["admission_year"], item["course"], item["selection_type"])
+            for item in school_rule_items
+        ]
+        if len(set(school_rule_keys)) != len(school_rule_keys):
+            raise ValueError("同じ学校・年度・コース・選抜区分の選抜ルールが重複しています")
         if len({
             (item["date"], item["exam_name"], item["exam_type"], item["subject"])
             for item in score_items

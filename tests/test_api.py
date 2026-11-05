@@ -1582,3 +1582,63 @@ def test_csv_import_rejects_more_than_row_limit(tmp_path, monkeypatch):
         )
         assert response.status_code == 413
         assert client.get("/api/scores").json() == []
+
+
+def test_backup_restore_rejects_duplicate_school_identity_without_replacing_data(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        school = client.post("/api/schools", json={
+            "name": "保持する高校",
+            "prefecture": "東京都",
+            "school_type": "公立",
+        })
+        assert school.status_code == 201
+
+        backup = client.get("/api/backup").json()
+        duplicate = dict(backup["schools"][0])
+        duplicate["id"] = "duplicate-school-id"
+        backup["schools"].append(duplicate)
+
+        response = client.post(
+            "/api/backup/restore",
+            json={**backup, "confirm_replace": True},
+        )
+
+        assert response.status_code == 422
+        schools = client.get("/api/schools").json()
+        assert len(schools) == 1
+        assert schools[0]["name"] == "保持する高校"
+
+
+def test_backup_restore_rejects_duplicate_school_rule_identity_without_replacing_data(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        school = client.post("/api/schools", json={
+            "name": "選抜ルール高校",
+            "prefecture": "東京都",
+            "school_type": "公立",
+        })
+        assert school.status_code == 201
+        school_id = school.json()["id"]
+        rule = client.post(f"/api/schools/{school_id}/rules", json={
+            "admission_year": 2027,
+            "course": "普通科",
+            "selection_type": "一般選抜",
+            "verification_status": "未確認",
+            "rule_data": {"memo": "backup test"},
+        })
+        assert rule.status_code == 201
+
+        backup = client.get("/api/backup").json()
+        duplicate = dict(backup["school_rules"][0])
+        duplicate["id"] = "duplicate-school-rule-id"
+        backup["school_rules"].append(duplicate)
+
+        response = client.post(
+            "/api/backup/restore",
+            json={**backup, "confirm_replace": True},
+        )
+
+        assert response.status_code == 422
+        schools = client.get("/api/schools").json()
+        assert len(schools) == 1
+        assert len(schools[0]["rules"]) == 1
+        assert schools[0]["rules"][0]["selection_type"] == "一般選抜"

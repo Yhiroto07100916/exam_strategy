@@ -19,6 +19,7 @@ def test_health_and_empty_state(tmp_path, monkeypatch):
             "weak_units": [],
             "unit_trends": [],
             "latest_exam": None,
+            "latest_exam_ambiguous": False,
             "target_gaps": [],
         }
 

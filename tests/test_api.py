@@ -996,6 +996,15 @@ def test_official_school_source_directory():
         urls = {item["url"] for item in result["official_sources"]}
         assert "https://www.kyoiku.metro.tokyo.lg.jp/admission/high_school/exam/boshuguide20261023" in urls
         assert "https://www.pref.kanagawa.jp/docs/dc4/nyusen/nyusen/kanagawa.html" in urls
+        sources_by_url = {item["url"]: item for item in result["official_sources"]}
+        assert len(sources_by_url) == len(result["official_sources"])
+        assert all(url.startswith("https://") for url in sources_by_url)
+        assert "2026年10月23日" in sources_by_url[
+            "https://www.kyoiku.metro.tokyo.lg.jp/admission/high_school/exam/boshuguide20261023"
+        ]["note"]
+        assert "2026年10月30日" in sources_by_url[
+            "https://www.pref.kanagawa.jp/docs/dc4/nyusen/nyusen/kanagawa.html"
+        ]["note"]
 
 
 def test_verified_school_rule_requires_source_cited_scoring_model(tmp_path, monkeypatch):

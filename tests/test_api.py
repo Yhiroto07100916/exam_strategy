@@ -992,7 +992,10 @@ def test_official_school_source_directory():
         }
         assert ("埼玉県", "私立") in source_pairs
         assert ("千葉県", "私立") in source_pairs
-        assert result["last_checked"] == "2026-11-03"
+        assert result["last_checked"] == "2026-11-06"
+        urls = {item["url"] for item in result["official_sources"]}
+        assert "https://www.kyoiku.metro.tokyo.lg.jp/admission/high_school/exam/boshuguide20261023" in urls
+        assert "https://www.pref.kanagawa.jp/docs/dc4/nyusen/nyusen/kanagawa.html" in urls
 
 
 def test_verified_school_rule_requires_source_cited_scoring_model(tmp_path, monkeypatch):

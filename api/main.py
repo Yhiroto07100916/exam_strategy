@@ -774,6 +774,7 @@ def analysis():
     settings = {row["key"]: json.loads(row["value"]) for row in setting_rows}
     summary = []
     latest_exam = None
+    latest_exam_ambiguous = False
     if score_rows:
         scores_df = pd.DataFrame([dict(row) for row in score_rows])
         scores_df["rate"] = scores_df["score"] / scores_df["max_score"] * 100
@@ -939,6 +940,7 @@ def analysis():
         "weak_units": weak_units,
         "unit_trends": unit_trends,
         "latest_exam": latest_exam,
+        "latest_exam_ambiguous": latest_exam_ambiguous,
         "target_gaps": target_gaps,
     }
 

@@ -831,7 +831,9 @@ def analysis():
     weak_units = []
     if question_rows:
         question_df = pd.DataFrame([dict(row) for row in question_rows])
-        for (subject, unit), group in question_df.groupby(["subject", "unit"]):
+        for (exam_type, subject, unit), group in question_df.groupby(
+            ["exam_type", "subject", "unit"], sort=True
+        ):
             has_complete_points = (
                 group["points"].notna().all()
                 and group["earned_points"].notna().all()
@@ -844,13 +846,16 @@ def analysis():
                 accuracy = float(group["correct"].mean() * 100)
                 method = "correct_count"
             weak_units.append({
+                "exam_type": str(exam_type),
                 "subject": subject,
                 "unit": unit,
                 "questions": int(len(group)),
                 "accuracy": round(accuracy, 1),
                 "calculation": method,
             })
-    weak_units.sort(key=lambda item: (item["accuracy"], item["subject"], item["unit"]))
+    weak_units.sort(
+        key=lambda item: (item["accuracy"], item["exam_type"], item["subject"], item["unit"])
+    )
 
     unit_trends = []
     dated_questions = [

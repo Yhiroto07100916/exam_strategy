@@ -157,7 +157,7 @@ def test_preview_pdf_ocr_reports_timeout_clearly(monkeypatch):
         ocr.preview_pdf_ocr(make_pdf())
 
 
-def test_preview_pdf_ocr_rejects_too_many_pages_and_closes_document(monkeypatch):
+def test_preview_pdf_ocr_rejects_too_many_pages(monkeypatch):
     document = fitz.open()
     for _ in range(ocr.MAX_PDF_PAGES + 1):
         document.new_page()

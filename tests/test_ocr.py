@@ -140,3 +140,34 @@ def test_ocr_confirm_rejects_invalid_date_without_saving(tmp_path, monkeypatch):
         response = client.post("/api/import/ocr-confirm", json={"scores": [score]})
         assert response.status_code == 422
         assert client.get("/api/scores").json() == []
+
+
+def test_preview_pdf_ocr_reports_timeout_clearly(monkeypatch):
+    monkeypatch.setattr(ocr.shutil, "which", lambda _: "/usr/bin/tesseract")
+    monkeypatch.setattr(
+        ocr.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="jpn\\neng", stderr=""),
+    )
+
+    def timeout(*args, **kwargs):
+        raise RuntimeError("process timeout")
+
+    monkeypatch.setattr(ocr.pytesseract, "image_to_string", timeout)
+    with pytest.raises(RuntimeError, match="OCR処理がタイムアウトしました"):
+        ocr.preview_pdf_ocr(make_pdf())
+
+
+def test_preview_pdf_ocr_rejects_too_many_pages_and_closes_document(monkeypatch):
+    document = fitz.open()
+    for _ in range(ocr.MAX_PDF_PAGES + 1):
+        document.new_page()
+    content = document.tobytes()
+    document.close()
+
+    monkeypatch.setattr(ocr.shutil, "which", lambda _: "/usr/bin/tesseract")
+    monkeypatch.setattr(
+        ocr.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="jpn\\neng", stderr=""),
+    )
+    with pytest.raises(ValueError, match="20ページまで"):
+        ocr.preview_pdf_ocr(content)

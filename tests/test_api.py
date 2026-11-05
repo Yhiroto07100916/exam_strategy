@@ -1420,7 +1420,7 @@ def test_university_excel_report_includes_exam_type_targets_and_weak_units(tmp_p
 
         assert {
             "成績データ", "問題別データ", "科目分析", "試験種別分析",
-            "科目別目標", "志望情報", "単元分析",
+            "科目別目標", "志望情報", "単元分析", "単元推移",
         }.issubset(workbook.sheetnames)
         exam_sheet = workbook["試験種別分析"]
         assert exam_sheet["A2"].value == "共通テスト"
@@ -1454,6 +1454,28 @@ def test_university_excel_report_includes_exam_type_targets_and_weak_units(tmp_p
             "過去問": {
                 "subject": "数学IA", "unit": "場合の数と確率",
                 "count": 1, "accuracy": 90,
+            },
+        }
+
+        trend_sheet = workbook["単元推移"]
+        assert [cell.value for cell in trend_sheet[1]] == [
+            "日付", "試験名", "試験種別", "科目", "単元", "問題数",
+            "正答率・得点率", "集計方法",
+        ]
+        trend_rows = {
+            trend_sheet.cell(row=row, column=2).value: {
+                "date": trend_sheet.cell(row=row, column=1).value,
+                "exam_type": trend_sheet.cell(row=row, column=3).value,
+                "accuracy": trend_sheet.cell(row=row, column=7).value,
+            }
+            for row in range(2, trend_sheet.max_row + 1)
+        }
+        assert trend_rows == {
+            "共通テスト模試": {
+                "date": "2026-11-01", "exam_type": "共通テスト", "accuracy": 40,
+            },
+            "過去問演習": {
+                "date": "2026-11-02", "exam_type": "過去問", "accuracy": 90,
             },
         }
 

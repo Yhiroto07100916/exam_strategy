@@ -1530,7 +1530,38 @@ def report():
         columns=["試験種別", "科目", "単元", "問題数", "正答率・得点率", "集計方法"],
     )
 
-    for frame in (subject_analysis, exam_type_analysis, target_df, profile_df, unit_analysis):
+    trend_rows = []
+    dated_questions = questions_df.dropna(subset=["date", "exam_name"])
+    if not dated_questions.empty:
+        for (exam_date, exam_name, exam_type, subject, unit), group in dated_questions.groupby(
+            ["date", "exam_name", "exam_type", "subject", "unit"], sort=True
+        ):
+            complete_points = (
+                group["points"].notna().all()
+                and group["earned_points"].notna().all()
+                and float(group["points"].sum()) > 0
+            )
+            if complete_points:
+                accuracy = float(group["earned_points"].sum() / group["points"].sum() * 100)
+                method = "配点ベース"
+            else:
+                accuracy = float(group["correct"].mean() * 100)
+                method = "正答数ベース"
+            trend_rows.append({
+                "日付": str(exam_date), "試験名": str(exam_name),
+                "試験種別": str(exam_type), "科目": str(subject), "単元": str(unit),
+                "問題数": int(len(group)), "正答率・得点率": round(accuracy, 1),
+                "集計方法": method,
+            })
+    unit_trend_analysis = pd.DataFrame(
+        trend_rows,
+        columns=["日付", "試験名", "試験種別", "科目", "単元", "問題数", "正答率・得点率", "集計方法"],
+    )
+
+    for frame in (
+        subject_analysis, exam_type_analysis, target_df, profile_df,
+        unit_analysis, unit_trend_analysis,
+    ):
         for column in frame.select_dtypes(include=["object"]).columns:
             frame[column] = frame[column].map(safe_excel_text)
 
@@ -1543,6 +1574,7 @@ def report():
         target_df.to_excel(writer, sheet_name="科目別目標", index=False)
         profile_df.to_excel(writer, sheet_name="志望情報", index=False)
         unit_analysis.to_excel(writer, sheet_name="単元分析", index=False)
+        unit_trend_analysis.to_excel(writer, sheet_name="単元推移", index=False)
 
         for worksheet in writer.book.worksheets:
             worksheet.freeze_panes = "A2"

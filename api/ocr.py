@@ -121,22 +121,33 @@ def preview_pdf_ocr(content: bytes, mode: str = "high_school") -> dict[str, Any]
 
     try:
         document = fitz.open(stream=content, filetype="pdf")
-        if len(document) > MAX_PDF_PAGES:
-            raise ValueError("OCRできるPDFは20ページまでです")
-        texts = []
-        for page in document:
-            bounds = page.rect
-            scale = min(2.0, 5000 / max(bounds.width, bounds.height))
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
-            image = Image.frombytes("RGB", [pixmap.width, pixmap.height], pixmap.samples)
-            texts.append(
-                pytesseract.image_to_string(image, lang="jpn+eng", timeout=30)
-            )
-        document.close()
-    except ValueError:
-        raise
     except Exception as error:
         raise ValueError("PDFを画像として読み込めません") from error
+
+    texts = []
+    with document:
+        if len(document) > MAX_PDF_PAGES:
+            raise ValueError("OCRできるPDFは20ページまでです")
+        for page in document:
+            try:
+                bounds = page.rect
+                scale = min(2.0, 5000 / max(bounds.width, bounds.height))
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+                image = Image.frombytes("RGB", [pixmap.width, pixmap.height], pixmap.samples)
+            except Exception as error:
+                raise ValueError("PDFを画像として読み込めません") from error
+            try:
+                texts.append(
+                    pytesseract.image_to_string(image, lang="jpn+eng", timeout=30)
+                )
+            except RuntimeError as error:
+                raise RuntimeError(
+                    "OCR処理がタイムアウトしました。ページ数を減らして再試行してください。"
+                ) from error
+            except pytesseract.TesseractError as error:
+                raise RuntimeError(
+                    "TesseractでOCRを実行できませんでした。日本語データとインストール状態を確認してください。"
+                ) from error
 
     return {
         "pages": len(texts),

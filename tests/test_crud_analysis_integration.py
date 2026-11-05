@@ -65,6 +65,7 @@ def test_score_edit_and_delete_refresh_analysis(tmp_path, monkeypatch):
             "weak_units": [],
             "unit_trends": [],
             "latest_exam": None,
+            "latest_exam_ambiguous": False,
             "target_gaps": [],
         }
 

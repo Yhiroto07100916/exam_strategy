@@ -774,6 +774,7 @@ def analysis():
     settings = {row["key"]: json.loads(row["value"]) for row in setting_rows}
     summary = []
     latest_exam = None
+    latest_exam_ambiguous = False
     if score_rows:
         scores_df = pd.DataFrame([dict(row) for row in score_rows])
         scores_df["rate"] = scores_df["score"] / scores_df["max_score"] * 100
@@ -791,24 +792,27 @@ def analysis():
 
         latest_date = scores_df["date"].max()
         latest_on_date = scores_df[scores_df["date"] == latest_date]
-        latest_exam_record = latest_on_date.iloc[-1]
-        latest_exam_name = latest_exam_record["exam_name"]
-        latest_exam_type = latest_exam_record["exam_type"]
-        latest_exam_rows = latest_on_date[
-            (latest_on_date["exam_name"] == latest_exam_name)
-            & (latest_on_date["exam_type"] == latest_exam_type)
-        ]
-        total = float(latest_exam_rows["score"].sum())
-        max_total = float(latest_exam_rows["max_score"].sum())
-        latest_exam = {
-            "date": str(latest_date),
-            "name": str(latest_exam_name),
-            "exam_type": str(latest_exam_type),
-            "total": total,
-            "max_total": max_total,
-            "rate": round(total / max_total * 100, 1) if max_total else 0,
-            "subjects_count": int(len(latest_exam_rows)),
-        }
+        latest_exam_keys = latest_on_date[["exam_name", "exam_type"]].drop_duplicates()
+        if len(latest_exam_keys) == 1:
+            latest_exam_name = latest_exam_keys.iloc[0]["exam_name"]
+            latest_exam_type = latest_exam_keys.iloc[0]["exam_type"]
+            latest_exam_rows = latest_on_date[
+                (latest_on_date["exam_name"] == latest_exam_name)
+                & (latest_on_date["exam_type"] == latest_exam_type)
+            ]
+            total = float(latest_exam_rows["score"].sum())
+            max_total = float(latest_exam_rows["max_score"].sum())
+            latest_exam = {
+                "date": str(latest_date),
+                "name": str(latest_exam_name),
+                "exam_type": str(latest_exam_type),
+                "total": total,
+                "max_total": max_total,
+                "rate": round(total / max_total * 100, 1) if max_total else 0,
+                "subjects_count": int(len(latest_exam_rows)),
+            }
+        else:
+            latest_exam_ambiguous = True
 
     exam_type_summary = []
     if score_rows:
@@ -936,6 +940,7 @@ def analysis():
         "weak_units": weak_units,
         "unit_trends": unit_trends,
         "latest_exam": latest_exam,
+        "latest_exam_ambiguous": latest_exam_ambiguous,
         "target_gaps": target_gaps,
     }
 

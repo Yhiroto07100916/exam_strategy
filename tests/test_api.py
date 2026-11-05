@@ -1642,3 +1642,51 @@ def test_backup_restore_rejects_duplicate_school_rule_identity_without_replacing
         assert len(schools) == 1
         assert len(schools[0]["rules"]) == 1
         assert schools[0]["rules"][0]["selection_type"] == "一般選抜"
+
+
+def test_school_rule_update_conflict_preserves_original_rule(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        school = client.post("/api/schools", json={
+            "name": "更新競合テスト高校",
+            "prefecture": "東京都",
+            "school_type": "公立",
+        })
+        assert school.status_code == 201
+        school_id = school.json()["id"]
+
+        first = client.post(f"/api/schools/{school_id}/rules", json={
+            "admission_year": 2027,
+            "course": "普通科",
+            "selection_type": "一般選抜",
+            "verification_status": "未確認",
+            "notes": "既存ルール",
+        })
+        second = client.post(f"/api/schools/{school_id}/rules", json={
+            "admission_year": 2027,
+            "course": "普通科",
+            "selection_type": "推薦選抜",
+            "verification_status": "未確認",
+            "notes": "更新対象ルール",
+        })
+        assert first.status_code == 201
+        assert second.status_code == 201
+
+        conflict = client.put(
+            f"/api/school-rules/{second.json()['id']}",
+            json={
+                "admission_year": 2027,
+                "course": "普通科",
+                "selection_type": "一般選抜",
+                "verification_status": "未確認",
+                "notes": "競合する更新",
+            },
+        )
+        assert conflict.status_code == 409
+
+        listed = client.get("/api/schools").json()
+        rules = listed[0]["rules"]
+        assert len(rules) == 2
+        saved = {rule["id"]: rule for rule in rules}
+        assert saved[first.json()["id"]]["selection_type"] == "一般選抜"
+        assert saved[second.json()["id"]]["selection_type"] == "推薦選抜"
+        assert saved[second.json()["id"]]["notes"] == "更新対象ルール"

@@ -132,8 +132,16 @@ $('#ocr-confirm').disabled=ocrCandidates.length===0;toast('OCR候補を抽出し
 $('#ocr-candidates').onclick=e=>{if(!e.target.matches('[data-ocr-remove]'))return;e.target.closest('.ocr-row').remove();$('#ocr-confirm').disabled=queryAll('.ocr-row').length===0};
 $('#ocr-confirm').onclick=async()=>{
 const rows=queryAll('.ocr-row');if(!rows.length)return toast('登録する候補がありません');
+for(const row of rows){
+const controls=[...row.querySelectorAll('input,select')];
+const invalid=controls.find(control=>!control.checkValidity());
+if(invalid){invalid.reportValidity();return}
+const score=Number(row.querySelector('[data-ocr-score]').value),maximum=Number(row.querySelector('[data-ocr-max]').value);
+if(!Number.isFinite(score)||!Number.isFinite(maximum)||maximum<=0||score>maximum)return toast('得点は0以上、満点以下になるように確認してください');
+}
 const confirmed=rows.map(row=>({date:row.querySelector('[data-ocr-date]').value,exam_name:row.querySelector('[data-ocr-name]').value,exam_type:row.querySelector('[data-ocr-exam-type]').value,subject:row.querySelector('[data-ocr-subject]').value,score:Number(row.querySelector('[data-ocr-score]').value),max_score:Number(row.querySelector('[data-ocr-max]').value)}));
-try{const result=await api('/import/ocr-confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scores:confirmed})});$('#ocr-candidates').innerHTML='';$('#ocr-confirm').disabled=true;toast(result.imported+'件登録 / 重複 '+result.duplicates+'件');await refresh()}catch(x){toast(x.message)}
+const button=$('#ocr-confirm');button.disabled=true;
+try{const result=await api('/import/ocr-confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scores:confirmed})});$('#ocr-candidates').innerHTML='';toast(result.imported+'件登録 / 重複 '+result.duplicates+'件');await refresh()}catch(x){toast(x.message);button.disabled=queryAll('.ocr-row').length===0?true:false}
 };
 
 $('#school-form').onsubmit=async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.target));try{await api('/schools',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});e.target.reset();await refresh();toast('学校を登録しました')}catch(x){toast(x.message)}};

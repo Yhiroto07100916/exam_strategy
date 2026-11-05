@@ -1690,3 +1690,34 @@ def test_school_rule_update_conflict_preserves_original_rule(tmp_path, monkeypat
         assert saved[first.json()["id"]]["selection_type"] == "一般選抜"
         assert saved[second.json()["id"]]["selection_type"] == "推薦選抜"
         assert saved[second.json()["id"]]["notes"] == "更新対象ルール"
+
+def test_weak_units_keep_exam_types_separate(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        headers = {"X-Exam-Mode": "university"}
+        for exam_type, correct, earned in [
+            ("共通テスト", False, 0),
+            ("過去問", True, 10),
+        ]:
+            response = client.post("/api/questions", headers=headers, json={
+                "date": "2026-11-01",
+                "exam_name": "英語演習",
+                "exam_type": exam_type,
+                "subject": "英語リーディング",
+                "unit": "長文読解",
+                "correct": correct,
+                "points": 10,
+                "earned_points": earned,
+            })
+            assert response.status_code == 201
+
+        weak_units = client.get("/api/analysis", headers=headers).json()["weak_units"]
+        assert len(weak_units) == 2
+        breakdown = {
+            row["exam_type"]: row
+            for row in weak_units
+        }
+        assert breakdown["共通テスト"]["accuracy"] == 0.0
+        assert breakdown["過去問"]["accuracy"] == 100.0
+        assert all(row["subject"] == "英語リーディング" for row in weak_units)
+        assert all(row["unit"] == "長文読解" for row in weak_units)
+

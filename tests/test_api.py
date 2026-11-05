@@ -1387,6 +1387,17 @@ def test_university_excel_report_includes_exam_type_targets_and_weak_units(tmp_p
             "earned_points": 4,
         })
         assert question_response.status_code == 201
+        past_paper_response = client.post("/api/questions", headers=headers, json={
+            "date": "2026-11-02",
+            "exam_name": "過去問演習",
+            "exam_type": "過去問",
+            "subject": "数学IA",
+            "unit": "場合の数と確率",
+            "correct": True,
+            "points": 10,
+            "earned_points": 9,
+        })
+        assert past_paper_response.status_code == 201
         settings_response = client.put("/api/settings", headers=headers, json={
             "profile": {},
             "target": {
@@ -1423,8 +1434,28 @@ def test_university_excel_report_includes_exam_type_targets_and_weak_units(tmp_p
         }
         assert profile_values["志望大学"] == "東京大学"
         unit_sheet = workbook["単元分析"]
-        assert unit_sheet["A2"].value == "数学IA"
-        assert unit_sheet["D2"].value == 40
+        assert [cell.value for cell in unit_sheet[1]] == [
+            "試験種別", "科目", "単元", "問題数", "正答率・得点率", "集計方法"
+        ]
+        unit_rows = {
+            unit_sheet.cell(row=row, column=1).value: {
+                "subject": unit_sheet.cell(row=row, column=2).value,
+                "unit": unit_sheet.cell(row=row, column=3).value,
+                "count": unit_sheet.cell(row=row, column=4).value,
+                "accuracy": unit_sheet.cell(row=row, column=5).value,
+            }
+            for row in range(2, unit_sheet.max_row + 1)
+        }
+        assert unit_rows == {
+            "共通テスト": {
+                "subject": "数学IA", "unit": "場合の数と確率",
+                "count": 1, "accuracy": 40,
+            },
+            "過去問": {
+                "subject": "数学IA", "unit": "場合の数と確率",
+                "count": 1, "accuracy": 90,
+            },
+        }
 
 
 

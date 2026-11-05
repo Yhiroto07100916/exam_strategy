@@ -779,15 +779,21 @@ def analysis():
         scores_df = pd.DataFrame([dict(row) for row in score_rows])
         scores_df["rate"] = scores_df["score"] / scores_df["max_score"] * 100
         for subject, group in scores_df.groupby("subject"):
-            latest = group.iloc[-1]
+            latest_date_for_subject = group["date"].max()
+            latest_on_date_for_subject = group[group["date"] == latest_date_for_subject]
+            latest_keys = latest_on_date_for_subject[["exam_name", "exam_type"]].drop_duplicates()
+            latest_ambiguous = len(latest_keys) > 1
+            latest = latest_on_date_for_subject.iloc[-1] if not latest_ambiguous else None
             summary.append({
                 "subject": subject,
                 "count": int(len(group)),
                 "average_rate": round(float(group["rate"].mean()), 1),
-                "latest_score": float(latest["score"]),
-                "latest_max": float(latest["max_score"]),
-                "latest_rate": round(float(latest["rate"]), 1),
-                "latest_deviation": None if pd.isna(latest["deviation"]) else float(latest["deviation"]),
+                "latest_score": None if latest_ambiguous else float(latest["score"]),
+                "latest_max": None if latest_ambiguous else float(latest["max_score"]),
+                "latest_rate": None if latest_ambiguous else round(float(latest["rate"]), 1),
+                "latest_deviation": None if latest_ambiguous or pd.isna(latest["deviation"]) else float(latest["deviation"]),
+                "latest_date": str(latest_date_for_subject),
+                "latest_ambiguous": latest_ambiguous,
             })
 
         latest_date = scores_df["date"].max()
@@ -819,17 +825,22 @@ def analysis():
         for (exam_type, subject), group in scores_df.groupby(
             ["exam_type", "subject"], sort=True
         ):
-            latest = group.iloc[-1]
+            latest_date_for_type = group["date"].max()
+            latest_on_date_for_type = group[group["date"] == latest_date_for_type]
+            latest_names = latest_on_date_for_type["exam_name"].drop_duplicates()
+            latest_ambiguous = len(latest_names) > 1
+            latest = latest_on_date_for_type.iloc[-1] if not latest_ambiguous else None
             exam_type_summary.append({
                 "exam_type": str(exam_type),
                 "subject": str(subject),
                 "count": int(len(group)),
                 "average_rate": round(float(group["rate"].mean()), 1),
-                "latest_date": str(latest["date"]),
-                "latest_exam_name": str(latest["exam_name"]),
-                "latest_score": float(latest["score"]),
-                "latest_max": float(latest["max_score"]),
-                "latest_rate": round(float(latest["rate"]), 1),
+                "latest_date": str(latest_date_for_type),
+                "latest_exam_name": None if latest_ambiguous else str(latest["exam_name"]),
+                "latest_score": None if latest_ambiguous else float(latest["score"]),
+                "latest_max": None if latest_ambiguous else float(latest["max_score"]),
+                "latest_rate": None if latest_ambiguous else round(float(latest["rate"]), 1),
+                "latest_ambiguous": latest_ambiguous,
             })
 
     weak_units = []
@@ -903,6 +914,8 @@ def analysis():
     target_subjects = settings.get("target", {}).get("subjects", {})
     target_gaps = []
     for subject_summary in summary:
+        if subject_summary.get("latest_ambiguous"):
+            continue
         target_config = target_subjects.get(subject_summary["subject"], {})
         goal = target_config.get("target_score")
         if goal is None:

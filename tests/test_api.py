@@ -1845,3 +1845,34 @@ def test_latest_exam_remains_available_when_only_one_exam_exists_on_latest_date(
         assert result["latest_exam"]["total"] == 150
         assert result["latest_exam"]["max_total"] == 200
         assert result["latest_exam_ambiguous"] is False
+
+def test_backup_restore_rejects_duplicate_score_identity_without_replacing_data(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        created = client.post("/api/scores", json={
+            "date": "2026-11-04",
+            "exam_name": "保持する模試",
+            "exam_type": "模試",
+            "subject": "数学",
+            "score": 68,
+            "max_score": 100,
+        })
+        assert created.status_code == 201
+
+        backup = client.get("/api/backup").json()
+        duplicate = dict(backup["scores"][0])
+        duplicate["id"] = "duplicate-score-record-id"
+        backup["scores"].append(duplicate)
+
+        response = client.post(
+            "/api/backup/restore",
+            json={**backup, "confirm_replace": True},
+        )
+
+        assert response.status_code == 422
+        assert "同じ試験・科目の成績が重複" in response.json()["detail"]
+        saved = client.get("/api/scores").json()
+        assert len(saved) == 1
+        assert saved[0]["id"] == created.json()["id"]
+        assert saved[0]["exam_name"] == "保持する模試"
+        assert saved[0]["score"] == 68.0
+

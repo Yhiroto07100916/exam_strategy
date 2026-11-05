@@ -50,11 +50,9 @@ def test_latest_exam_is_not_mixed_with_other_exam_on_same_date(tmp_path, monkeyp
                 "score": score, "max_score": 100
             })
             assert response.status_code == 201
-        latest = client.get("/api/analysis").json()["latest_exam"]
-        assert latest["name"] == "模試B"
-        assert latest["total"] == 90
-        assert latest["max_total"] == 100
-        assert latest["subjects_count"] == 1
+        result = client.get("/api/analysis").json()
+        assert result["latest_exam"] is None
+        assert result["latest_exam_ambiguous"] is True
 
 
 def test_latest_exam_is_isolated_by_exam_type_when_name_matches(tmp_path, monkeypatch):
@@ -73,12 +71,9 @@ def test_latest_exam_is_isolated_by_exam_type_when_name_matches(tmp_path, monkey
             })
             assert response.status_code == 201
 
-        latest = client.get("/api/analysis").json()["latest_exam"]
-        assert latest["name"] == "同名テスト"
-        assert latest["exam_type"] == "定期考査"
-        assert latest["total"] == 80
-        assert latest["max_total"] == 100
-        assert latest["subjects_count"] == 1
+        result = client.get("/api/analysis").json()
+        assert result["latest_exam"] is None
+        assert result["latest_exam_ambiguous"] is True
 
 
 def test_analysis_uses_correct_fallback_when_point_data_is_incomplete(tmp_path, monkeypatch):
@@ -1776,3 +1771,20 @@ def test_weak_units_keep_exam_types_separate(tmp_path, monkeypatch):
         assert all(row["subject"] == "英語リーディング" for row in weak_units)
         assert all(row["unit"] == "長文読解" for row in weak_units)
 
+
+
+def test_latest_exam_remains_available_when_only_one_exam_exists_on_latest_date(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        for subject, score in [("国語", 70), ("数学", 80)]:
+            response = client.post("/api/scores", json={
+                "date": "2026-10-01", "exam_name": "10月模試",
+                "exam_type": "模試", "subject": subject,
+                "score": score, "max_score": 100,
+            })
+            assert response.status_code == 201
+
+        result = client.get("/api/analysis").json()
+        assert result["latest_exam"]["name"] == "10月模試"
+        assert result["latest_exam"]["total"] == 150
+        assert result["latest_exam"]["max_total"] == 200
+        assert result["latest_exam_ambiguous"] is False

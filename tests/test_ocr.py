@@ -105,3 +105,38 @@ def test_parse_ocr_candidates_skips_ambiguous_unlabelled_numbers():
     assert candidates[0]["subject"] == "英語"
     assert candidates[0]["score_candidate"] == 90
     assert candidates[0]["max_score_candidate"] == 100
+
+def test_confirmed_ocr_import_deduplicates_within_one_batch(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        score = {
+            "date": "2026-10-01", "exam_name": "OCR模試", "exam_type": "模試",
+            "subject": "国語", "score": 80, "max_score": 100,
+        }
+        response = client.post(
+            "/api/import/ocr-confirm", json={"scores": [score, score]}
+        )
+        assert response.status_code == 200
+        assert response.json() == {"imported": 1, "duplicates": 1}
+        assert len(client.get("/api/scores").json()) == 1
+
+
+def test_ocr_confirm_rejects_score_above_maximum_without_saving(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        score = {
+            "date": "2026-10-01", "exam_name": "OCR模試", "exam_type": "模試",
+            "subject": "国語", "score": 101, "max_score": 100,
+        }
+        response = client.post("/api/import/ocr-confirm", json={"scores": [score]})
+        assert response.status_code == 422
+        assert client.get("/api/scores").json() == []
+
+
+def test_ocr_confirm_rejects_invalid_date_without_saving(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        score = {
+            "date": "2026-02-30", "exam_name": "OCR模試", "exam_type": "模試",
+            "subject": "国語", "score": 80, "max_score": 100,
+        }
+        response = client.post("/api/import/ocr-confirm", json={"scores": [score]})
+        assert response.status_code == 422
+        assert client.get("/api/scores").json() == []

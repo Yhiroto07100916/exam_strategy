@@ -1377,8 +1377,11 @@ async def import_pdf(file: UploadFile = File(...)):
 async def preview_pdf_ocr_endpoint(file: UploadFile = File(...)):
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(415, "PDFファイルを選択してください")
+    content = await file.read(MAX_PDF_BYTES + 1)
+    if len(content) > MAX_PDF_BYTES:
+        raise HTTPException(413, "PDFは20MB以下のファイルを選択してください")
     try:
-        return preview_pdf_ocr(await file.read(MAX_PDF_BYTES + 1), mode=get_exam_mode())
+        return preview_pdf_ocr(content, mode=get_exam_mode())
     except RuntimeError as error:
         raise HTTPException(503, str(error))
     except ValueError as error:

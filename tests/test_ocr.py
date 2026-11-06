@@ -33,6 +33,19 @@ def test_parse_ocr_candidates():
     assert candidates[1]["max_score_candidate"] == 100
 
 
+
+def test_ocr_preview_rejects_oversized_pdf_before_starting_ocr(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "MAX_PDF_BYTES", 10)
+    monkeypatch.setattr(ocr.shutil, "which", lambda _: None)
+    with make_client(tmp_path, monkeypatch) as client:
+        response = client.post(
+            "/api/import/pdf/ocr-preview",
+            files={"file": ("large.pdf", b"x" * 11, "application/pdf")},
+        )
+        assert response.status_code == 413
+        assert response.json()["detail"] == "PDFは20MB以下のファイルを選択してください"
+        assert client.get("/api/scores").json() == []
+
 def test_ocr_preview_requires_tesseract(tmp_path, monkeypatch):
     monkeypatch.setattr(ocr.shutil, "which", lambda _: None)
     with make_client(tmp_path, monkeypatch) as client:

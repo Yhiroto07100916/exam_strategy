@@ -36,8 +36,13 @@ SCORE_COLUMNS = [
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    connection = db()
-    connection.close()
+    for mode in sorted(EXAM_MODES):
+        token = exam_mode_context.set(mode)
+        try:
+            connection = db()
+            connection.close()
+        finally:
+            exam_mode_context.reset(token)
     yield
 
 

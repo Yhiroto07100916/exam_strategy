@@ -208,3 +208,62 @@ def test_unit_trends_keep_same_day_exams_separate(tmp_path, monkeypatch):
         assert len(trends) == 2
         assert {item["exam_name"] for item in trends} == {"午前模試", "午後模試"}
         assert {item["accuracy"] for item in trends} == {40.0, 80.0}
+
+def test_question_edit_moves_record_between_exam_unit_trends(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        created = client.post("/api/questions", json={
+            "date": "2026-10-01",
+            "exam_name": "10月模試",
+            "exam_type": "模試",
+            "subject": "数学",
+            "unit": "二次関数",
+            "correct": False,
+            "points": 10,
+            "earned_points": 2,
+        })
+        assert created.status_code == 201
+        item_id = created.json()["id"]
+
+        before = client.get("/api/analysis").json()
+        assert len(before["weak_units"]) == 1
+        assert before["weak_units"][0]["unit"] == "二次関数"
+        assert before["weak_units"][0]["accuracy"] == 20.0
+        assert before["unit_trends"][0]["exam_name"] == "10月模試"
+
+        updated = client.put(f"/api/questions/{item_id}", json={
+            "date": "2026-11-01",
+            "exam_name": "11月定期考査",
+            "exam_type": "定期考査",
+            "subject": "数学",
+            "unit": "図形",
+            "correct": True,
+            "points": 10,
+            "earned_points": 9,
+        })
+        assert updated.status_code == 200
+
+        after = client.get("/api/analysis").json()
+        assert after["weak_units"] == [{
+            "exam_type": "定期考査",
+            "subject": "数学",
+            "unit": "図形",
+            "questions": 1,
+            "accuracy": 90.0,
+            "calculation": "points",
+        }]
+        assert after["unit_trends"] == [{
+            "date": "2026-11-01",
+            "exam_name": "11月定期考査",
+            "exam_type": "定期考査",
+            "subject": "数学",
+            "unit": "図形",
+            "questions": 1,
+            "accuracy": 90.0,
+            "calculation": "points",
+        }]
+
+        deleted = client.delete(f"/api/questions/{item_id}")
+        assert deleted.status_code == 204
+        final = client.get("/api/analysis").json()
+        assert final["weak_units"] == []
+        assert final["unit_trends"] == []

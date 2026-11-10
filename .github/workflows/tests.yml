@@ -18,4 +18,5 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt
       - run: node --check web/app.js
+      - run: node --test tests/test_ocr_preview_state.js
       - run: python -m pytest -q

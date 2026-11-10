@@ -128,7 +128,16 @@ $('#allocation-result').innerHTML='<h3>科目別の目標点</h3><p>対象 '+res
 };
 
 function localDateValue(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
+function clearOcrPreview(){
+const empty=window.createEmptyOcrPreviewState();
+ocrCandidates=empty.candidates;
+$('#pdf-text').value=empty.text;
+$('#ocr-candidates').innerHTML='';
+$('#ocr-confirm').disabled=empty.confirmDisabled;
+}
+$('#pdf-file').onchange=clearOcrPreview;
 $('#ocr-preview').onclick=async()=>{
+clearOcrPreview();
 const file=$('#pdf-file').files[0];if(!file)return toast('PDFを選択してください');
 const form=new FormData();form.append('file',file);
 try{

@@ -90,3 +90,44 @@ def test_target_allocation_preserves_bounds_when_scores_have_more_than_two_decim
     assert result["planned_total"] == sum(
         item["target_score"] for item in result["subjects"]
     )
+
+
+def test_target_allocation_cent_reconciliation_never_drops_below_raw_current_score(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(api, "DB", tmp_path / "target-allocation-reconciliation.sqlite3")
+
+    subjects = [
+        {
+            "subject": "数学",
+            "current_score": 0.949,
+            "max_score": 100,
+            "weight": 6.77,
+        },
+        {
+            "subject": "英語",
+            "current_score": 1.734,
+            "max_score": 100,
+            "weight": 0.14,
+        },
+    ]
+
+    with TestClient(api.app) as client:
+        response = client.post(
+            "/api/targets/allocate",
+            json={"target_total": 2.763774, "subjects": subjects},
+        )
+
+    assert response.status_code == 200
+    result = response.json()
+    targets = {item["subject"]: item for item in result["subjects"]}
+
+    assert targets["英語"]["target_score"] >= 1.734
+    assert targets["数学"]["target_score"] >= 0.949
+    assert all(
+        subject["current_score"] <= subject["target_score"] <= subject["max_score"]
+        for subject in result["subjects"]
+    )
+    assert result["planned_total"] == sum(
+        subject["target_score"] for subject in result["subjects"]
+    )

@@ -113,7 +113,7 @@ def allocate_subject_targets(
             candidates = [
                 item for item in result
                 if item["target_score"] - 0.01
-                >= item["current_score"] - 1e-9
+                >= float(subject_inputs[item["subject"]]["current_score"]) - 1e-9
             ]
             candidates.sort(
                 key=lambda item: exact_goals[item["subject"]] - item["target_score"]

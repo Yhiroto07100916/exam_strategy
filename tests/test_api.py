@@ -1,4 +1,5 @@
 import io
+import sqlite3
 
 import pandas as pd
 from fastapi.testclient import TestClient
@@ -8,6 +9,32 @@ import api.main as api
 def make_client(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "DB", tmp_path / "test.sqlite3")
     return TestClient(api.app)
+
+
+def test_startup_initializes_both_exam_mode_databases(tmp_path, monkeypatch):
+    database = tmp_path / "exam_strategy.sqlite3"
+    university_database = database.with_name("university_" + database.name)
+    monkeypatch.setattr(api, "DB", database)
+
+    with TestClient(api.app):
+        assert database.exists()
+        assert university_database.exists()
+
+    expected_tables = {"scores", "questions", "settings", "schools", "school_rules"}
+    for path in (database, university_database):
+        with sqlite3.connect(path) as connection:
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            question_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(questions)")
+            }
+
+        assert expected_tables <= tables
+        assert "exam_type" in question_columns
 
 
 def test_health_and_empty_state(tmp_path, monkeypatch):

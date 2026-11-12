@@ -3,6 +3,23 @@ from __future__ import annotations
 from typing import Any
 
 
+def _display_score(
+    value: float, *, minimum: float | None = None, maximum: float | None = None
+) -> float:
+    """Round to cents unless rounding would violate a real score boundary."""
+    rounded = round(value, 2)
+    if minimum is not None and rounded < minimum - 1e-9:
+        return value
+    if maximum is not None and rounded > maximum + 1e-9:
+        return value
+    return rounded
+
+
+def _display_total(value: float) -> float:
+    rounded = round(value, 2)
+    return rounded if abs(value - rounded) < 1e-9 else value
+
+
 def allocate_subject_targets(
     subjects: list[dict[str, Any]], target_total: float
 ) -> dict[str, Any]:
@@ -56,23 +73,25 @@ def allocate_subject_targets(
         maximum = float(item["max_score"])
         goal = min(maximum, current + allocations[item["subject"]])
         exact_goals[item["subject"]] = goal
-        rounded_goal = round(goal, 2)
+        displayed_current = _display_score(current, minimum=0, maximum=maximum)
+        displayed_goal = _display_score(
+            goal, minimum=current, maximum=maximum
+        )
+        displayed_maximum = (
+            round(maximum, 2) if abs(maximum - round(maximum, 2)) < 1e-9 else maximum
+        )
         result.append({
             "subject": item["subject"],
-            "current_score": round(current, 2),
-            "target_score": rounded_goal,
-            "increase": round(goal - current, 2),
-            "max_score": round(maximum, 2),
-            "target_rate": round(rounded_goal / maximum * 100, 1),
+            "current_score": displayed_current,
+            "target_score": displayed_goal,
+            "increase": round(displayed_goal - displayed_current, 2),
+            "max_score": displayed_maximum,
+            "target_rate": round(displayed_goal / maximum * 100, 1),
             "weight": float(item["weight"]),
         })
 
-    # Keep the displayed subject targets consistent with the displayed total.
-    # Distribute rounding cents by largest remainder without crossing score caps
-    # or lowering a subject below its displayed current score.
-    current_display_total = sum(
-        round(float(item["current_score"]), 2) for item in subjects
-    )
+    # Reconcile ordinary cent-rounding differences without crossing real bounds.
+    current_display_total = sum(item["current_score"] for item in result)
     desired_total = max(round(planned_total, 2), current_display_total)
     allocated_total = sum(item["target_score"] for item in result)
     residual = round(desired_total - allocated_total, 2)
@@ -94,7 +113,7 @@ def allocate_subject_targets(
             candidates = [
                 item for item in result
                 if item["target_score"] - 0.01
-                >= item["current_score"] - 1e-9
+                >= float(subject_inputs[item["subject"]]["current_score"]) - 1e-9
             ]
             candidates.sort(
                 key=lambda item: exact_goals[item["subject"]] - item["target_score"]
@@ -115,10 +134,10 @@ def allocate_subject_targets(
         residual = round(desired_total - allocated_total, 2)
 
     return {
-        "current_total": round(current_total, 2),
-        "requested_total": round(float(target_total), 2),
-        "planned_total": round(allocated_total, 2),
-        "maximum_total": round(maximum_total, 2),
+        "current_total": _display_total(current_total),
+        "requested_total": _display_total(float(target_total)),
+        "planned_total": _display_total(allocated_total),
+        "maximum_total": _display_total(maximum_total),
         "already_at_or_above_goal": current_total >= target_total,
         "subjects": result,
         "method": "weighted_headroom",

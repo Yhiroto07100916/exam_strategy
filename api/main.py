@@ -28,6 +28,7 @@ from .exam_mode import EXAM_MODES, exam_mode_context, get_exam_mode
 from .target_routes import router as target_router
 from .school_targeting import SchoolScoringModel, SchoolTargetAllocationRequest, allocate_school_targets
 MAX_IMPORT_ROWS = 10000
+MAX_BACKUP_BYTES = 20 * 1024 * 1024
 
 SCORE_COLUMNS = [
     "id", "date", "exam_name", "exam_type", "subject", "score",
@@ -596,8 +597,12 @@ def export_backup():
 
 @app.post("/api/backup/restore")
 def restore_backup(backup: BackupRestoreRequest, request: Request):
-    if request.headers.get("content-length") and int(request.headers["content-length"]) > 20 * 1024 * 1024:
-        raise HTTPException(413, "バックアップファイルは20MB以下にしてください")
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        if not content_length or not content_length.isascii() or not content_length.isdigit():
+            raise HTTPException(400, "Content-Lengthヘッダーが不正です")
+        if int(content_length) > MAX_BACKUP_BYTES:
+            raise HTTPException(413, "バックアップファイルは20MB以下にしてください")
     if backup.format_version != 1:
         raise HTTPException(422, "対応していないバックアップ形式です")
     if backup.exam_mode != get_exam_mode():

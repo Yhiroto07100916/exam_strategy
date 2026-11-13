@@ -1903,3 +1903,38 @@ def test_backup_restore_rejects_duplicate_score_identity_without_replacing_data(
         assert saved[0]["exam_name"] == "保持する模試"
         assert saved[0]["score"] == 68.0
 
+
+
+def test_backup_restore_rejects_malformed_content_length_without_replacing_data(
+    tmp_path, monkeypatch
+):
+    with make_client(tmp_path, monkeypatch) as client:
+        created = client.post("/api/scores", json={
+            "date": "2026-11-05",
+            "exam_name": "保持する模試",
+            "exam_type": "模試",
+            "subject": "英語",
+            "score": 74,
+            "max_score": 100,
+        })
+        assert created.status_code == 201
+
+        exported = client.get("/api/backup")
+        assert exported.status_code == 200
+
+        for invalid_length in ("invalid", "-1", "1.5"):
+            response = client.post(
+                "/api/backup/restore",
+                content=exported.content,
+                headers={
+                    "content-type": "application/json",
+                    "content-length": invalid_length,
+                },
+            )
+            assert response.status_code == 400
+            assert response.json()["detail"] == "Content-Lengthヘッダーが不正です"
+
+        saved = client.get("/api/scores").json()
+        assert len(saved) == 1
+        assert saved[0]["id"] == created.json()["id"]
+        assert saved[0]["score"] == 74.0

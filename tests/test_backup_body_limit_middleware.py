@@ -104,6 +104,7 @@ def test_backup_body_limit_rejects_malformed_or_duplicate_content_length():
         [(b"content-length", b"1.5")],
         [(b"content-length", b"4"), (b"content-length", b"4")],
         [(b"content-length", b"4"), (b"transfer-encoding", b"chunked")],
+        [(b"content-length", b"9" * 5000)],
     ):
         status, body, app_calls, _, receive_calls = invoke_middleware(
             headers, [b"data"]

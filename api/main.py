@@ -69,10 +69,18 @@ class BackupRestoreBodyLimitMiddleware:
             if not raw_length or not raw_length.isdigit():
                 await reject(400, "Content-Lengthヘッダーが不正です")
                 return
-            declared_length = int(raw_length)
-            if declared_length > self.max_bytes:
+            normalized_length = raw_length.lstrip(b"0") or b"0"
+            maximum_length = str(self.max_bytes).encode("ascii")
+            if (
+                len(normalized_length) > len(maximum_length)
+                or (
+                    len(normalized_length) == len(maximum_length)
+                    and normalized_length > maximum_length
+                )
+            ):
                 await reject(413, "バックアップファイルは20MB以下にしてください")
                 return
+            declared_length = int(normalized_length)
 
         # Buffer only this endpoint's body, with a strict cap. This also covers
         # chunked requests and requests that omit or under-report Content-Length.

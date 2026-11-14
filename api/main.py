@@ -30,6 +30,89 @@ from .school_targeting import SchoolScoringModel, SchoolTargetAllocationRequest,
 MAX_IMPORT_ROWS = 10000
 MAX_BACKUP_BYTES = 20 * 1024 * 1024
 
+
+class BackupRestoreBodyLimitMiddleware:
+    """Enforce the backup upload limit before FastAPI parses the request body."""
+
+    def __init__(self, app, max_bytes: int = MAX_BACKUP_BYTES):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if (
+            scope["type"] != "http"
+            or scope.get("method") != "POST"
+            or scope.get("path") != "/api/backup/restore"
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        headers = scope.get("headers", [])
+        content_lengths = [
+            value for name, value in headers if name.lower() == b"content-length"
+        ]
+        transfer_encodings = [
+            value for name, value in headers if name.lower() == b"transfer-encoding"
+        ]
+
+        async def reject(status_code: int, detail: str):
+            response = JSONResponse(status_code=status_code, content={"detail": detail})
+            await response(scope, receive, send)
+
+        if len(content_lengths) > 1 or (content_lengths and transfer_encodings):
+            await reject(400, "Content-Lengthヘッダーが不正です")
+            return
+
+        declared_length = None
+        if content_lengths:
+            raw_length = content_lengths[0]
+            if not raw_length or not raw_length.isdigit():
+                await reject(400, "Content-Lengthヘッダーが不正です")
+                return
+            declared_length = int(raw_length)
+            if declared_length > self.max_bytes:
+                await reject(413, "バックアップファイルは20MB以下にしてください")
+                return
+
+        # Buffer only this endpoint's body, with a strict cap. This also covers
+        # chunked requests and requests that omit or under-report Content-Length.
+        messages = []
+        total_bytes = 0
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            if message["type"] != "http.request":
+                continue
+
+            body = message.get("body", b"")
+            total_bytes += len(body)
+            if total_bytes > self.max_bytes:
+                await reject(413, "バックアップファイルは20MB以下にしてください")
+                return
+
+            messages.append(message)
+            if not message.get("more_body", False):
+                break
+
+        if declared_length is not None and declared_length != total_bytes:
+            await reject(400, "Content-Lengthヘッダーが不正です")
+            return
+
+        message_index = 0
+
+        async def replay_receive():
+            nonlocal message_index
+            if message_index < len(messages):
+                message = messages[message_index]
+                message_index += 1
+                return message
+            return await receive()
+
+        await self.app(scope, replay_receive, send)
+
+
+
 SCORE_COLUMNS = [
     "id", "date", "exam_name", "exam_type", "subject", "score",
     "max_score", "deviation", "rank", "examinees", "created_at",
@@ -62,6 +145,12 @@ async def select_exam_mode(request: Request, call_next):
     finally:
         exam_mode_context.reset(token)
 
+
+
+app.add_middleware(
+    BackupRestoreBodyLimitMiddleware,
+    max_bytes=MAX_BACKUP_BYTES,
+)
 
 
 def db() -> sqlite3.Connection:
@@ -596,13 +685,7 @@ def export_backup():
 
 
 @app.post("/api/backup/restore")
-def restore_backup(backup: BackupRestoreRequest, request: Request):
-    content_length = request.headers.get("content-length")
-    if content_length is not None:
-        if not content_length or not content_length.isascii() or not content_length.isdigit():
-            raise HTTPException(400, "Content-Lengthヘッダーが不正です")
-        if int(content_length) > MAX_BACKUP_BYTES:
-            raise HTTPException(413, "バックアップファイルは20MB以下にしてください")
+def restore_backup(backup: BackupRestoreRequest):
     if backup.format_version != 1:
         raise HTTPException(422, "対応していないバックアップ形式です")
     if backup.exam_mode != get_exam_mode():

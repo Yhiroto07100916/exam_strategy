@@ -84,7 +84,7 @@ class BackupRestoreBodyLimitMiddleware:
 
         # Buffer only this endpoint's body, with a strict cap. This also covers
         # chunked requests and requests that omit or under-report Content-Length.
-        messages = []
+        body_buffer = bytearray()
         total_bytes = 0
         while True:
             message = await receive()
@@ -93,13 +93,13 @@ class BackupRestoreBodyLimitMiddleware:
             if message["type"] != "http.request":
                 continue
 
-            body = message.get("body", b"")
-            total_bytes += len(body)
+            chunk = message.get("body", b"")
+            total_bytes += len(chunk)
             if total_bytes > self.max_bytes:
                 await reject(413, "バックアップファイルは20MB以下にしてください")
                 return
 
-            messages.append(message)
+            body_buffer.extend(chunk)
             if not message.get("more_body", False):
                 break
 
@@ -107,14 +107,17 @@ class BackupRestoreBodyLimitMiddleware:
             await reject(400, "Content-Lengthヘッダーが不正です")
             return
 
-        message_index = 0
+        replayed_body = False
 
         async def replay_receive():
-            nonlocal message_index
-            if message_index < len(messages):
-                message = messages[message_index]
-                message_index += 1
-                return message
+            nonlocal replayed_body
+            if not replayed_body:
+                replayed_body = True
+                return {
+                    "type": "http.request",
+                    "body": bytes(body_buffer),
+                    "more_body": False,
+                }
             return await receive()
 
         await self.app(scope, replay_receive, send)

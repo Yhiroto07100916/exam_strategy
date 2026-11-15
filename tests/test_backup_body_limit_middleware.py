@@ -108,9 +108,8 @@ def test_backup_body_limit_rejects_malformed_or_duplicate_content_length():
         [(b"content-length", b"1.5")],
         [(b"content-length", b"4"), (b"content-length", b"4")],
         [(b"content-length", b"4"), (b"transfer-encoding", b"chunked")],
-        [(b"content-length", b"9" * 5000)],
     ):
-        status, body, app_calls, _, receive_calls = invoke_middleware(
+        status, body, app_calls, _, receive_calls, _ = invoke_middleware(
             headers, [b"data"]
         )
 
@@ -118,6 +117,17 @@ def test_backup_body_limit_rejects_malformed_or_duplicate_content_length():
         assert body == {"detail": "Content-Lengthヘッダーが不正です"}
         assert app_calls == []
         assert receive_calls == 0
+
+
+def test_backup_body_limit_rejects_extremely_long_numeric_content_length():
+    status, body, app_calls, _, receive_calls, _ = invoke_middleware(
+        [(b"content-length", b"9" * 5000)], [b"data"]
+    )
+
+    assert status == 413
+    assert body == {"detail": "バックアップファイルは20MB以下にしてください"}
+    assert app_calls == []
+    assert receive_calls == 0
 
 
 def test_backup_body_limit_rejects_content_length_mismatch():

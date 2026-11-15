@@ -1,6 +1,9 @@
 import asyncio
 import json
 
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
+
 from api.main import BackupRestoreBodyLimitMiddleware
 
 
@@ -183,3 +186,33 @@ def test_backup_body_limit_does_not_intercept_other_routes():
     asyncio.run(middleware(scope, receive, send))
 
     assert app_calls == [True]
+
+
+
+def test_backup_body_limit_integrates_with_fastapi_for_chunked_and_exact_bodies():
+    app = FastAPI()
+    app.add_middleware(BackupRestoreBodyLimitMiddleware, max_bytes=4)
+    endpoint_calls = []
+
+    @app.post("/api/backup/restore")
+    async def restore(request: Request):
+        endpoint_calls.append(True)
+        return {"body": (await request.body()).decode("ascii")}
+
+    with TestClient(app) as client:
+        oversized = client.post(
+            "/api/backup/restore",
+            content=iter([b"abc", b"de"]),
+        )
+        exact_limit = client.post(
+            "/api/backup/restore",
+            content=b"abcd",
+        )
+
+    assert oversized.status_code == 413
+    assert oversized.json() == {
+        "detail": "バックアップファイルは20MB以下にしてください"
+    }
+    assert exact_limit.status_code == 200
+    assert exact_limit.json() == {"body": "abcd"}
+    assert endpoint_calls == [True]

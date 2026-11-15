@@ -16,6 +16,7 @@ def invoke_middleware(headers, chunks, max_bytes=4):
     receive_calls = 0
     app_calls = []
     received_bodies = []
+    received_message_counts = []
     sent_messages = []
 
     async def receive():
@@ -31,14 +32,17 @@ def invoke_middleware(headers, chunks, max_bytes=4):
     async def downstream(scope, downstream_receive, downstream_send):
         app_calls.append(True)
         body = bytearray()
+        message_count = 0
         while True:
             message = await downstream_receive()
+            message_count += 1
             if message["type"] == "http.disconnect":
                 break
             body.extend(message.get("body", b""))
             if not message.get("more_body", False):
                 break
         received_bodies.append(bytes(body))
+        received_message_counts.append(message_count)
         await downstream_send({
             "type": "http.response.start",
             "status": 204,
@@ -65,11 +69,11 @@ def invoke_middleware(headers, chunks, max_bytes=4):
         for message in sent_messages
         if message["type"] == "http.response.body"
     )
-    return status, json.loads(response_body) if response_body else None, app_calls, received_bodies, receive_calls
+    return status, json.loads(response_body) if response_body else None, app_calls, received_bodies, receive_calls, received_message_counts
 
 
 def test_backup_body_limit_rejects_chunked_body_without_content_length():
-    status, body, app_calls, _, _ = invoke_middleware(
+    status, body, app_calls, _, _, _ = invoke_middleware(
         [], [b"abc", b"de"]
     )
 
@@ -79,7 +83,7 @@ def test_backup_body_limit_rejects_chunked_body_without_content_length():
 
 
 def test_backup_body_limit_rejects_underreported_content_length():
-    status, body, app_calls, _, _ = invoke_middleware(
+    status, body, app_calls, _, _, _ = invoke_middleware(
         [(b"content-length", b"2")], [b"abcde"]
     )
 
@@ -89,7 +93,7 @@ def test_backup_body_limit_rejects_underreported_content_length():
 
 
 def test_backup_body_limit_rejects_declared_oversize_before_reading_body():
-    status, body, app_calls, _, receive_calls = invoke_middleware(
+    status, body, app_calls, _, receive_calls, _ = invoke_middleware(
         [(b"content-length", b"5")], [b"abcde"]
     )
 
@@ -117,7 +121,7 @@ def test_backup_body_limit_rejects_malformed_or_duplicate_content_length():
 
 
 def test_backup_body_limit_rejects_content_length_mismatch():
-    status, body, app_calls, _, _ = invoke_middleware(
+    status, body, app_calls, _, _, _ = invoke_middleware(
         [(b"content-length", b"3")], [b"ab"]
     )
 
@@ -127,14 +131,15 @@ def test_backup_body_limit_rejects_content_length_mismatch():
 
 
 def test_backup_body_limit_accepts_exact_limit_and_replays_all_chunks():
-    status, body, app_calls, received_bodies, _ = invoke_middleware(
-        [(b"content-length", b"4")], [b"ab", b"cd"]
+    status, body, app_calls, received_bodies, _, message_counts = invoke_middleware(
+        [(b"content-length", b"4")], [b""] * 1000 + [b"ab", b"", b"cd", b""]
     )
 
     assert status == 204
     assert body is None
     assert app_calls == [True]
     assert received_bodies == [b"abcd"]
+    assert message_counts == [1]
 
 
 def test_backup_body_limit_does_not_intercept_other_routes():

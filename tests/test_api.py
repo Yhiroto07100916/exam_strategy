@@ -1081,6 +1081,12 @@ def test_official_school_source_directory():
         assert "2026年11月13日" in sources_by_url[
             "https://www.pref.kanagawa.jp/docs/dc4/nyusen/nyusen/kanagawa.html"
         ]["note"]
+        assert "2026年9月16日" in sources_by_url[
+            "https://www.pref.saitama.lg.jp/f2208/r9nyuushi-senbatsuzisshinaiyou.html"
+        ]["note"]
+        assert "2026年11月11日" in sources_by_url[
+            "https://www.pref.saitama.lg.jp/f2208/nyushi/r9nyushijyoho.html"
+        ]["note"]
 
 
 def test_verified_school_rule_requires_source_cited_scoring_model(tmp_path, monkeypatch):

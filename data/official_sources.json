@@ -1,6 +1,6 @@
 {
   "admission_year": 2027,
-  "last_checked": "2026-11-06",
+  "last_checked": "2026-11-17",
   "official_sources": [
     {
       "prefecture": "東京都",
@@ -72,7 +72,19 @@
       "prefecture": "神奈川県",
       "category": "公立",
       "url": "https://www.pref.kanagawa.jp/docs/dc4/nyusen/nyusen/kanagawa.html",
-      "note": "令和9年度神奈川県公立高校入学者選抜の公式案内。2026年10月30日更新。10月27日発表の募集定員、特色検査・マークシート等の更新情報と選考基準へのリンクを確認"
+      "note": "令和9年度神奈川県公立高校入学者選抜の公式案内。2026年11月13日更新。11月12日掲載の志願のてびき、10月27日発表の募集定員、10月9日掲載のマークシート方式等の案内を確認。学校別の選考基準は別リンクで確認"
+    },
+    {
+      "prefecture": "神奈川県",
+      "category": "公立",
+      "url": "https://www.pref.kanagawa.jp/documents/24739/r9shigannotebiki_teitsuu.pdf",
+      "note": "令和9年度神奈川県公立高等学校入学者選抜の志願のてびき（定時制・通信制）。2026年11月12日掲載。志願手続・必要書類等の受検者向け案内"
+    },
+    {
+      "prefecture": "神奈川県",
+      "category": "公立",
+      "url": "https://www.pref.kanagawa.jp/documents/24739/r9shigannotebiki_zen.pdf",
+      "note": "令和9年度神奈川県公立高等学校入学者選抜の志願のてびき（全日制・別科）。2026年11月12日掲載。志願手続・必要書類等の受検者向け案内"
     }
   ],
   "policy": "都県・公私・学校・学科・年度・選抜区分ごとに公式資料を確認。学校別の配点・比率・評価方法は該当校の資料を出典付きで記録し、私立校の方式を都県共通の計算式で推定しない。"

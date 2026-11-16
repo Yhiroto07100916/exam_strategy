@@ -1063,17 +1063,22 @@ def test_official_school_source_directory():
         }
         assert ("埼玉県", "私立") in source_pairs
         assert ("千葉県", "私立") in source_pairs
-        assert result["last_checked"] == "2026-11-06"
+        assert result["last_checked"] == "2026-11-17"
         urls = {item["url"] for item in result["official_sources"]}
         assert "https://www.kyoiku.metro.tokyo.lg.jp/admission/high_school/exam/boshuguide20261023" in urls
         assert "https://www.pref.kanagawa.jp/docs/dc4/nyusen/nyusen/kanagawa.html" in urls
+        assert "https://www.pref.kanagawa.jp/documents/24739/r9shigannotebiki_zen.pdf" in urls
+        assert "https://www.pref.kanagawa.jp/documents/24739/r9shigannotebiki_teitsuu.pdf" in urls
         sources_by_url = {item["url"]: item for item in result["official_sources"]}
         assert len(sources_by_url) == len(result["official_sources"])
+        assert "2026年11月12日掲載" in sources_by_url[
+            "https://www.pref.kanagawa.jp/documents/24739/r9shigannotebiki_zen.pdf"
+        ]["note"]
         assert all(url.startswith("https://") for url in sources_by_url)
         assert "2026年10月23日" in sources_by_url[
             "https://www.kyoiku.metro.tokyo.lg.jp/admission/high_school/exam/boshuguide20261023"
         ]["note"]
-        assert "2026年10月30日" in sources_by_url[
+        assert "2026年11月13日" in sources_by_url[
             "https://www.pref.kanagawa.jp/docs/dc4/nyusen/nyusen/kanagawa.html"
         ]["note"]
 

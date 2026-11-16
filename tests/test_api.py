@@ -1078,7 +1078,7 @@ def test_official_school_source_directory():
         assert "2026年10月23日" in sources_by_url[
             "https://www.kyoiku.metro.tokyo.lg.jp/admission/high_school/exam/boshuguide20261023"
         ]["note"]
-        assert "2026年10月30日" in sources_by_url[
+        assert "2026年11月13日" in sources_by_url[
             "https://www.pref.kanagawa.jp/docs/dc4/nyusen/nyusen/kanagawa.html"
         ]["note"]
 

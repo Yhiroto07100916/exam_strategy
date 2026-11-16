@@ -719,6 +719,7 @@ def restore_backup(backup: BackupRestoreRequest):
                 **raw,
                 "correct": raw["correct"],
             })
+            validate_question_exam_reference(item)
             data = item.model_dump()
             data["correct"] = int(data["correct"])
             data["id"] = str(raw["id"])

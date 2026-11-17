@@ -186,3 +186,18 @@ def test_preview_pdf_ocr_rejects_too_many_pages(monkeypatch):
     )
     with pytest.raises(ValueError, match="20ページまで"):
         ocr.preview_pdf_ocr(content)
+
+
+def test_preview_pdf_ocr_reports_tesseract_execution_error_separately(monkeypatch):
+    monkeypatch.setattr(ocr.shutil, "which", lambda _: "/usr/bin/tesseract")
+    monkeypatch.setattr(
+        ocr.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="jpn\\neng", stderr=""),
+    )
+
+    def execution_error(*args, **kwargs):
+        raise ocr.pytesseract.TesseractError(1, "mock execution failure")
+
+    monkeypatch.setattr(ocr.pytesseract, "image_to_string", execution_error)
+    with pytest.raises(RuntimeError, match="TesseractでOCRを実行できませんでした"):
+        ocr.preview_pdf_ocr(make_pdf())

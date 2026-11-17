@@ -140,13 +140,13 @@ def preview_pdf_ocr(content: bytes, mode: str = "high_school") -> dict[str, Any]
                 texts.append(
                     pytesseract.image_to_string(image, lang="jpn+eng", timeout=30)
                 )
-            except RuntimeError as error:
-                raise RuntimeError(
-                    "OCR処理がタイムアウトしました。ページ数を減らして再試行してください。"
-                ) from error
             except pytesseract.TesseractError as error:
                 raise RuntimeError(
                     "TesseractでOCRを実行できませんでした。日本語データとインストール状態を確認してください。"
+                ) from error
+            except RuntimeError as error:
+                raise RuntimeError(
+                    "OCR処理がタイムアウトしました。ページ数を減らして再試行してください。"
                 ) from error
 
     return {

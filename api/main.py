@@ -24,7 +24,8 @@ DATA = ROOT / "data"
 WEB = ROOT / "web"
 DB = DATA / "exam_strategy.sqlite3"
 from .main_models import is_valid_subject
-from .exam_mode import EXAM_MODES, exam_mode_context, get_exam_mode
+from .exam_mode import EXAM_MODES, exam_mode_context, get_exam_mode, subjects_for_mode
+from .study_planning import StudyPlanGenerateRequest, StudyTaskProgressUpdate, generate_study_plan
 from .target_routes import router as target_router
 from .school_targeting import SchoolScoringModel, SchoolTargetAllocationRequest, allocate_school_targets
 MAX_IMPORT_ROWS = 10000
@@ -217,6 +218,32 @@ def db() -> sqlite3.Connection:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(school_id, admission_year, course, selection_type)
+        )
+    """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS study_plans (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            target_date TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            generation_mode TEXT NOT NULL,
+            plan_json TEXT NOT NULL,
+            source_snapshot_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS study_task_progress (
+            plan_id TEXT NOT NULL REFERENCES study_plans(id) ON DELETE CASCADE,
+            task_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            actual_minutes INTEGER,
+            note TEXT NOT NULL DEFAULT '',
+            completed_at TEXT,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(plan_id, task_id)
         )
     """)
     connection.commit()
@@ -862,6 +889,135 @@ def restore_backup(backup: BackupRestoreRequest):
         },
         "exam_mode": get_exam_mode(),
     }
+
+
+@app.post("/api/study-plans/generate", status_code=201)
+def create_study_plan(request: StudyPlanGenerateRequest):
+    connection = db()
+    try:
+        score_rows = connection.execute(
+            "SELECT * FROM scores ORDER BY date, created_at"
+        ).fetchall()
+        question_rows = connection.execute(
+            "SELECT * FROM questions ORDER BY date, subject, unit"
+        ).fetchall()
+        setting_rows = connection.execute(
+            "SELECT key, value FROM settings"
+        ).fetchall()
+        saved_settings = {
+            row["key"]: json.loads(row["value"]) for row in setting_rows
+        }
+        target = saved_settings.get("target", {})
+        try:
+            plan = generate_study_plan(
+                [dict(row) for row in score_rows],
+                [dict(row) for row in question_rows],
+                target,
+                subjects_for_mode(),
+                request,
+            )
+        except ValueError as error:
+            raise HTTPException(422, str(error))
+        now = datetime.now(timezone.utc).isoformat()
+        plan["created_at"] = now
+        connection.execute(
+            """INSERT INTO study_plans (
+                id, title, start_date, target_date, status, generation_mode,
+                plan_json, source_snapshot_json, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                plan["id"], plan["title"], plan["start_date"], plan["target_date"],
+                "active", plan["generation_mode"], json.dumps(plan, ensure_ascii=False),
+                json.dumps({"subject_signals": plan["subject_signals"]}, ensure_ascii=False),
+                now, now,
+            ),
+        )
+        connection.commit()
+        return plan
+    finally:
+        connection.close()
+
+
+@app.get("/api/study-plans")
+def list_study_plans():
+    connection = db()
+    try:
+        rows = connection.execute(
+            """SELECT id, title, start_date, target_date, status,
+                      generation_mode, created_at, updated_at
+               FROM study_plans ORDER BY created_at DESC"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
+
+
+@app.get("/api/study-plans/{plan_id}")
+def get_study_plan(plan_id: str):
+    connection = db()
+    try:
+        row = connection.execute(
+            "SELECT * FROM study_plans WHERE id=?", (plan_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "学習計画が見つかりません")
+        plan = json.loads(row["plan_json"])
+        progress_rows = connection.execute(
+            """SELECT task_id, status, actual_minutes, note, completed_at, updated_at
+               FROM study_task_progress WHERE plan_id=?""",
+            (plan_id,),
+        ).fetchall()
+        plan["progress"] = {item["task_id"]: dict(item) for item in progress_rows}
+        return plan
+    finally:
+        connection.close()
+
+
+@app.patch("/api/study-plans/{plan_id}/tasks/{task_id}")
+def update_study_task_progress(
+    plan_id: str, task_id: str, update: StudyTaskProgressUpdate
+):
+    connection = db()
+    try:
+        row = connection.execute(
+            "SELECT plan_json FROM study_plans WHERE id=?", (plan_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "学習計画が見つかりません")
+        plan = json.loads(row["plan_json"])
+        known_task = any(
+            task.get("id") == task_id
+            for month in plan.get("months", [])
+            for week in month.get("weeks", [])
+            for day in week.get("days", [])
+            for task in day.get("tasks", [])
+        )
+        if not known_task:
+            raise HTTPException(404, "学習タスクが見つかりません")
+        now = datetime.now(timezone.utc).isoformat()
+        completed_at = now if update.status == "completed" else None
+        connection.execute(
+            """INSERT INTO study_task_progress (
+                plan_id, task_id, status, actual_minutes, note, completed_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(plan_id, task_id) DO UPDATE SET
+                status=excluded.status,
+                actual_minutes=excluded.actual_minutes,
+                note=excluded.note,
+                completed_at=excluded.completed_at,
+                updated_at=excluded.updated_at""",
+            (
+                plan_id, task_id, update.status, update.actual_minutes,
+                update.note, completed_at, now,
+            ),
+        )
+        connection.commit()
+        return {
+            "plan_id": plan_id, "task_id": task_id, **update.model_dump(),
+            "completed_at": completed_at, "updated_at": now,
+        }
+    finally:
+        connection.close()
 
 
 @app.get("/api/analysis")

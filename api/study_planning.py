@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import uuid
+import json
+import os
+
+import httpx
 from collections import defaultdict
 from datetime import date, timedelta
 from typing import Any
@@ -308,3 +312,105 @@ def generate_study_plan(
         "months": list(months_by_key.values()),
         "created_at": None,
     }
+
+
+async def enrich_study_plan_with_ai(plan: dict[str, Any]) -> dict[str, Any]:
+    """Optionally enrich task wording through an OpenAI-compatible chat endpoint.
+
+    Dates, durations, subjects, units and task IDs remain controlled by the
+    deterministic planner. The model may only improve task titles/instructions.
+    """
+    api_key = os.getenv("STUDY_PLANNER_API_KEY")
+    if not api_key:
+        plan["ai_status"] = "not_configured"
+        return plan
+
+    base_url = os.getenv("STUDY_PLANNER_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    model = os.getenv("STUDY_PLANNER_MODEL", "gpt-4o-mini")
+    task_topics = {}
+    for month in plan.get("months", []):
+        for week in month.get("weeks", []):
+            for day in week.get("days", []):
+                for task in day.get("tasks", []):
+                    key = (task["subject"], task.get("unit") or "")
+                    task_topics[key] = {
+                        "subject": key[0],
+                        "unit": key[1],
+                        "accuracy": task["evidence"].get("unit_accuracy"),
+                        "question_count": task["evidence"].get("question_count", 0),
+                    }
+
+    if not task_topics:
+        plan["ai_status"] = "no_tasks"
+        return plan
+
+    prompt = {
+        "task_topics": list(task_topics.values()),
+        "requirements": [
+            "各項目に日本語の短いtitleと具体的なinstructionsを作る",
+            "単元名・科目名を変更しない",
+            "問題の解き直し、理解確認、類題演習、間隔を空けた復習を適切に組み合わせる",
+            "記録数が少ない単元は断定せず、まず理解度を確認する",
+            "学習時間、日付、タスク数、科目を追加・変更しない",
+            "JSON形式で items 配列を返す。各要素は subject, unit, title, instructions のみ",
+        ],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": model,
+                    "temperature": 0.2,
+                    "response_format": {"type": "json_object"},
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "あなたは学習計画の文章を整えるアシスタントです。"
+                            "渡された科目・単元の範囲内で、実行可能な短い学習タスクを提案してください。"
+                            "計画の時間・日付・配分は変更しません。",
+                        },
+                        {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                    ],
+                },
+            )
+            response.raise_for_status()
+        content = response.json()["choices"][0]["message"]["content"]
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("items"), list):
+            raise ValueError("AI応答のJSON形式が不正です")
+
+        enrichments = {}
+        for item in parsed["items"]:
+            if not isinstance(item, dict):
+                continue
+            key = (item.get("subject"), item.get("unit") or "")
+            if key not in task_topics:
+                continue
+            title, instructions = item.get("title"), item.get("instructions")
+            if (
+                isinstance(title, str) and title.strip()
+                and isinstance(instructions, str) and instructions.strip()
+                and len(title) <= 100 and len(instructions) <= 300
+            ):
+                enrichments[key] = (title.strip(), instructions.strip())
+
+        if set(enrichments) != set(task_topics):
+            raise ValueError("AI応答に必要な学習タスクが揃っていません")
+
+        for month in plan.get("months", []):
+            for week in month.get("weeks", []):
+                for day in week.get("days", []):
+                    for task in day.get("tasks", []):
+                        key = (task["subject"], task.get("unit") or "")
+                        task["title"], task["instructions"] = enrichments[key]
+
+        plan["generation_mode"] = "ai_assisted"
+        plan["ai_status"] = "generated"
+        plan["ai_model"] = model
+    except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        # A provider outage or invalid model response must not block a usable plan.
+        plan["ai_status"] = "fallback"
+        plan["ai_notice"] = "AI文章生成を利用できなかったため、自動生成した標準タスクを表示しています。"
+    return plan

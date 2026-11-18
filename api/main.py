@@ -1100,7 +1100,7 @@ def review_study_plan(plan_id: str, request: StudyPlanReviewRequest):
         plan = json.loads(row["plan_json"])
         today = date.today()
         monday = date.fromisoformat(request.week_start) if request.week_start else (
-            today - datetime.timedelta(days=today.weekday())
+            today - timedelta(days=today.weekday())
         )
         sunday = monday + timedelta(days=6)
         progress_rows = connection.execute(

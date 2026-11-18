@@ -129,6 +129,7 @@ def _score_signals(scores: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
                 grouped[str(item.get("subject", ""))].append({
                     "date": str(item.get("date", "")),
                     "exam_name": str(item.get("exam_name", "")),
+                    "exam_type": str(item.get("exam_type", "模試")),
                     "rate": score / maximum * 100,
                 })
         except (TypeError, ValueError):
@@ -140,7 +141,8 @@ def _score_signals(scores: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         recent = items[:3]
         latest_date = recent[0]["date"]
         latest_keys = {
-            (item["exam_name"], item["date"]) for item in items
+            (item["exam_name"], item["exam_type"], item["date"])
+            for item in items
             if item["date"] == latest_date
         }
         result[subject] = {

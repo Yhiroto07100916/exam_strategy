@@ -1,0 +1,519 @@
+from __future__ import annotations
+
+import uuid
+import json
+import os
+
+import httpx
+from collections import defaultdict
+from datetime import date, timedelta
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+class StudyPlanGenerateRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    target_date: str
+    availability: dict[int, int] = Field(
+        default_factory=lambda: {1: 60, 2: 60, 3: 60, 4: 60, 5: 60, 6: 120, 7: 120}
+    )
+    session_minutes: int = Field(default=50, ge=20, le=120)
+
+    @field_validator("target_date")
+    @classmethod
+    def validate_target_date(cls, value: str) -> str:
+        try:
+            parsed = date.fromisoformat(value)
+        except (TypeError, ValueError):
+            raise ValueError("目標日はYYYY-MM-DD形式で入力してください")
+        today = date.today()
+        if parsed < today:
+            raise ValueError("目標日は今日以降の日付にしてください")
+        if parsed > today + timedelta(days=365):
+            raise ValueError("計画期間は1年以内にしてください")
+        return parsed.isoformat()
+
+    @model_validator(mode="after")
+    def validate_availability(self):
+        if not self.availability:
+            raise ValueError("学習可能な曜日と時間を1日以上設定してください")
+        for weekday, minutes in self.availability.items():
+            if weekday not in range(1, 8):
+                raise ValueError("曜日は1（月）〜7（日）で指定してください")
+            if minutes < 0 or minutes > 600:
+                raise ValueError("曜日ごとの学習時間は0〜600分で指定してください")
+        if not any(self.availability.values()):
+            raise ValueError("学習可能な時間を1日以上設定してください")
+        return self
+
+
+class StudyTaskProgressUpdate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    status: str = Field(pattern="^(pending|completed|skipped)$")
+    actual_minutes: int | None = Field(default=None, ge=0, le=600)
+    note: str = Field(default="", max_length=500)
+
+
+class StudyPlanReviewRequest(BaseModel):
+    week_start: str | None = None
+
+    @field_validator("week_start")
+    @classmethod
+    def validate_week_start(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError as error:
+            raise ValueError("週の開始日はYYYY-MM-DD形式で入力してください") from error
+        if parsed.isoweekday() != 1:
+            raise ValueError("週の開始日は月曜日を指定してください")
+        return parsed.isoformat()
+
+
+class StudyPlanReplanRequest(BaseModel):
+    from_date: str | None = None
+    reason: str = Field(default="学習実績を反映した再調整", max_length=200)
+
+    @field_validator("from_date")
+    @classmethod
+    def validate_from_date(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            return date.fromisoformat(value).isoformat()
+        except ValueError as error:
+            raise ValueError("再計画開始日はYYYY-MM-DD形式で入力してください") from error
+
+
+def _unit_signals(questions: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for item in questions:
+        grouped[(str(item.get("subject", "")), str(item.get("unit", "")),
+                 str(item.get("exam_type", "模試")))].append(item)
+
+    result: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for (subject, unit, exam_type), items in grouped.items():
+        has_points = all(
+            item.get("points") is not None and item.get("earned_points") is not None
+            for item in items
+        ) and sum(float(item.get("points") or 0) for item in items) > 0
+        if has_points:
+            total = sum(float(item["points"]) for item in items)
+            earned = sum(float(item["earned_points"]) for item in items)
+            accuracy = earned / total * 100
+        else:
+            accuracy = sum(bool(item.get("correct")) for item in items) / len(items) * 100
+        result[subject].append({
+            "unit": unit,
+            "exam_type": exam_type,
+            "accuracy": round(accuracy, 1),
+            "question_count": len(items),
+            "confidence": "暫定" if len(items) < 5 else "参考",
+        })
+    for units in result.values():
+        units.sort(key=lambda item: (item["accuracy"], item["unit"]))
+    return result
+
+
+def _score_signals(scores: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in scores:
+        try:
+            maximum = float(item.get("max_score") or 0)
+            score = float(item.get("score") or 0)
+            if maximum > 0:
+                grouped[str(item.get("subject", ""))].append({
+                    "date": str(item.get("date", "")),
+                    "exam_name": str(item.get("exam_name", "")),
+                    "exam_type": str(item.get("exam_type", "模試")),
+                    "rate": score / maximum * 100,
+                })
+        except (TypeError, ValueError):
+            continue
+
+    result = {}
+    for subject, items in grouped.items():
+        items.sort(key=lambda item: item["date"], reverse=True)
+        recent = items[:3]
+        latest_date = recent[0]["date"]
+        latest_keys = {
+            (item["exam_name"], item["exam_type"], item["date"])
+            for item in items
+            if item["date"] == latest_date
+        }
+        result[subject] = {
+            "average_rate": round(sum(item["rate"] for item in recent) / len(recent), 1),
+            "records": len(items),
+            "latest_ambiguous": len(latest_keys) > 1,
+        }
+    return result
+
+
+def generate_study_plan(
+    scores: list[dict[str, Any]],
+    questions: list[dict[str, Any]],
+    target: dict[str, Any],
+    subjects: list[str],
+    request: StudyPlanGenerateRequest,
+    today: date | None = None,
+) -> dict[str, Any]:
+    """Build a deterministic, evidence-linked monthly/weekly/daily plan.
+
+    Time allocation and dates are computed server-side so an optional AI
+    enrichment layer can never exceed the learner's stated availability.
+    """
+    start = today or date.today()
+    finish = date.fromisoformat(request.target_date)
+    if finish < start:
+        raise ValueError("目標日は開始日以降にしてください")
+
+    score_data = _score_signals(scores)
+    unit_data = _unit_signals(questions)
+    target_subjects = target.get("subjects", {}) if isinstance(target, dict) else {}
+
+    observed_subjects = list(dict.fromkeys(
+        [*score_data.keys(), *unit_data.keys(), *target_subjects.keys()]
+    ))
+    available_subjects = observed_subjects or list(subjects)
+    signals = []
+    for subject in available_subjects:
+        units = unit_data.get(subject, [])
+        weakest = units[:3]
+        score = score_data.get(subject)
+        target_config = target_subjects.get(subject, {}) if isinstance(target_subjects, dict) else {}
+        target_score = target_config.get("target_score") if isinstance(target_config, dict) else None
+        max_score = target_config.get("max_score") if isinstance(target_config, dict) else None
+        target_gap = 0.0
+        if target_score is not None and max_score:
+            try:
+                target_gap = max(0.0, float(target_score) / float(max_score) * 100 -
+                                 (score["average_rate"] if score else 0.0))
+            except (TypeError, ValueError, ZeroDivisionError):
+                target_gap = 0.0
+        weakness = (
+            sum(100 - item["accuracy"] for item in weakest) / len(weakest) / 100
+            if weakest else 0.25
+        )
+        score_gap = (
+            max(0.0, 75.0 - score["average_rate"]) / 100
+            if score else 0.2
+        )
+        weight = 1.0 + weakness * 2.0 + score_gap + target_gap / 100
+        signals.append({
+            "subject": subject,
+            "weight": round(weight, 3),
+            "average_rate": score["average_rate"] if score else None,
+            "score_records": score["records"] if score else 0,
+            "latest_ambiguous": score["latest_ambiguous"] if score else False,
+            "target_gap_points": round(target_gap, 1),
+            "weak_units": weakest,
+        })
+
+    if not signals:
+        raise ValueError("計画対象の科目がありません")
+
+    # Exclude subjects with no evidence only when the mode subject list is empty;
+    # otherwise keep all registered subjects so the schedule remains balanced.
+    total_weight = sum(item["weight"] for item in signals)
+    for item in signals:
+        item["share"] = item["weight"] / total_weight
+
+    days = []
+    current = start
+    while current <= finish:
+        minutes = int(request.availability.get(current.isoweekday(), 0))
+        if minutes:
+            days.append({"date": current.isoformat(), "minutes": minutes})
+        current += timedelta(days=1)
+
+    if not days:
+        raise ValueError("目標日までに学習可能な日がありません")
+
+    daily_tasks = []
+    allocated_by_subject: dict[str, int] = defaultdict(int)
+    allocated_by_unit: dict[tuple[str, str], int] = defaultdict(int)
+    for day_item in days:
+        remaining = day_item["minutes"]
+        tasks = []
+        while remaining > 0:
+            duration = min(request.session_minutes, remaining)
+            # Weighted deficit scheduling avoids simply repeating the first subject.
+            ideal_so_far = sum(allocated_by_subject.values()) + duration
+            chosen = max(
+                signals,
+                key=lambda item: item["share"] * ideal_so_far -
+                allocated_by_subject[item["subject"]]
+            )
+            units = chosen["weak_units"]
+            unit = (
+                min(units, key=lambda item: allocated_by_unit[(chosen["subject"], item["unit"])])
+                if units else None
+            )
+            task = {
+                "id": str(uuid.uuid4()),
+                "subject": chosen["subject"],
+                "unit": unit["unit"] if unit else None,
+                "title": (f"{unit['unit']}の理解・解き直し" if unit else
+                          f"{chosen['subject']}の基礎確認と演習"),
+                "instructions": ("間違えた問題を解き直し、解法を自分の言葉で説明する"
+                                 if unit else "基本事項を確認してから標準問題に取り組む"),
+                "duration_minutes": duration,
+                "evidence": {
+                    "unit_accuracy": unit["accuracy"] if unit else None,
+                    "question_count": unit["question_count"] if unit else 0,
+                    "confidence": unit["confidence"] if unit else "成績データなし",
+                    "recent_average_rate": chosen["average_rate"],
+                    "target_gap_points": chosen["target_gap_points"],
+                },
+                "status": "pending",
+            }
+            tasks.append(task)
+            daily_tasks.append({**task, "date": day_item["date"]})
+            allocated_by_subject[chosen["subject"]] += duration
+            if unit:
+                allocated_by_unit[(chosen["subject"], unit["unit"])] += duration
+            remaining -= duration
+        day_item["tasks"] = tasks
+        day_item["total_minutes"] = sum(item["duration_minutes"] for item in tasks)
+
+    weeks_by_key: dict[str, dict[str, Any]] = {}
+    months_by_key: dict[str, dict[str, Any]] = {}
+    for day_item in days:
+        day_date = date.fromisoformat(day_item["date"])
+        monday = day_date - timedelta(days=day_date.weekday())
+        week_key = monday.isoformat()
+        month_key = day_date.strftime("%Y-%m")
+        if week_key not in weeks_by_key:
+            weeks_by_key[week_key] = {
+                "id": str(uuid.uuid4()), "week_start": week_key, "days": [],
+                "total_minutes": 0, "focus_subjects": [],
+            }
+        week = weeks_by_key[week_key]
+        week["days"].append(day_item)
+        week["total_minutes"] += day_item["total_minutes"]
+        if month_key not in months_by_key:
+            months_by_key[month_key] = {
+                "id": str(uuid.uuid4()), "month": month_key, "weeks": [],
+                "total_minutes": 0, "focus_subjects": [],
+            }
+        month = months_by_key[month_key]
+        month["total_minutes"] += day_item["total_minutes"]
+
+    for week in weeks_by_key.values():
+        used = {task["subject"] for day_item in week["days"] for task in day_item["tasks"]}
+        week["focus_subjects"] = sorted(used)
+    for month in months_by_key.values():
+        month_weeks = [
+            week for week in weeks_by_key.values()
+            if any(day_item["date"].startswith(month["month"]) for day_item in week["days"])
+        ]
+        # A calendar week can span two months; include it only once per month
+        # and derive month totals from its actual in-month days below.
+        month_days = [
+            day_item for week in month_weeks for day_item in week["days"]
+            if day_item["date"].startswith(month["month"])
+        ]
+        month["weeks"] = [{
+            **week,
+            "days": [day_item for day_item in week["days"]
+                     if day_item["date"].startswith(month["month"])],
+            "total_minutes": sum(
+                day_item["total_minutes"] for day_item in week["days"]
+                if day_item["date"].startswith(month["month"])
+            ),
+        } for week in month_weeks]
+        month["total_minutes"] = sum(item["total_minutes"] for item in month_days)
+        month["focus_subjects"] = sorted({
+            task["subject"] for day_item in month_days for task in day_item["tasks"]
+        })
+
+    total_minutes = sum(item["total_minutes"] for item in days)
+    return {
+        "id": str(uuid.uuid4()),
+        "title": f"{start.isoformat()}から{finish.isoformat()}までの学習計画",
+        "start_date": start.isoformat(),
+        "target_date": finish.isoformat(),
+        "generation_mode": "data_driven_v1",
+        "total_minutes": total_minutes,
+        "total_study_days": len(days),
+        "session_minutes": request.session_minutes,
+        "availability": {str(key): value for key, value in request.availability.items()},
+        "subject_signals": signals,
+        "months": list(months_by_key.values()),
+        "created_at": None,
+    }
+
+
+async def enrich_study_plan_with_ai(plan: dict[str, Any]) -> dict[str, Any]:
+    """Optionally enrich task wording through an OpenAI-compatible chat endpoint.
+
+    Dates, durations, subjects, units and task IDs remain controlled by the
+    deterministic planner. The model may only improve task titles/instructions.
+    """
+    api_key = os.getenv("STUDY_PLANNER_API_KEY")
+    if not api_key:
+        plan["ai_status"] = "not_configured"
+        return plan
+
+    base_url = os.getenv("STUDY_PLANNER_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    model = os.getenv("STUDY_PLANNER_MODEL", "gpt-4o-mini")
+    task_topics = {}
+    for month in plan.get("months", []):
+        for week in month.get("weeks", []):
+            for day in week.get("days", []):
+                for task in day.get("tasks", []):
+                    key = (task["subject"], task.get("unit") or "")
+                    task_topics[key] = {
+                        "subject": key[0],
+                        "unit": key[1],
+                        "accuracy": task["evidence"].get("unit_accuracy"),
+                        "question_count": task["evidence"].get("question_count", 0),
+                    }
+
+    if not task_topics:
+        plan["ai_status"] = "no_tasks"
+        return plan
+
+    prompt = {
+        "task_topics": list(task_topics.values()),
+        "requirements": [
+            "各項目に日本語の短いtitleと具体的なinstructionsを作る",
+            "単元名・科目名を変更しない",
+            "問題の解き直し、理解確認、類題演習、間隔を空けた復習を適切に組み合わせる",
+            "記録数が少ない単元は断定せず、まず理解度を確認する",
+            "学習時間、日付、タスク数、科目を追加・変更しない",
+            "JSON形式で items 配列を返す。各要素は subject, unit, title, instructions のみ",
+        ],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": model,
+                    "temperature": 0.2,
+                    "response_format": {"type": "json_object"},
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "あなたは学習計画の文章を整えるアシスタントです。"
+                            "渡された科目・単元の範囲内で、実行可能な短い学習タスクを提案してください。"
+                            "計画の時間・日付・配分は変更しません。",
+                        },
+                        {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                    ],
+                },
+            )
+            response.raise_for_status()
+        content = response.json()["choices"][0]["message"]["content"]
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("items"), list):
+            raise ValueError("AI応答のJSON形式が不正です")
+
+        enrichments = {}
+        for item in parsed["items"]:
+            if not isinstance(item, dict):
+                continue
+            key = (item.get("subject"), item.get("unit") or "")
+            if key not in task_topics:
+                continue
+            title, instructions = item.get("title"), item.get("instructions")
+            if (
+                isinstance(title, str) and title.strip()
+                and isinstance(instructions, str) and instructions.strip()
+                and len(title) <= 100 and len(instructions) <= 300
+            ):
+                enrichments[key] = (title.strip(), instructions.strip())
+
+        if set(enrichments) != set(task_topics):
+            raise ValueError("AI応答に必要な学習タスクが揃っていません")
+
+        for month in plan.get("months", []):
+            for week in month.get("weeks", []):
+                for day in week.get("days", []):
+                    for task in day.get("tasks", []):
+                        key = (task["subject"], task.get("unit") or "")
+                        task["title"], task["instructions"] = enrichments[key]
+
+        plan["generation_mode"] = "ai_assisted"
+        plan["ai_status"] = "generated"
+        plan["ai_model"] = model
+    except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        # A provider outage or invalid model response must not block a usable plan.
+        plan["ai_status"] = "fallback"
+        plan["ai_notice"] = "AI文章生成を利用できなかったため、自動生成した標準タスクを表示しています。"
+    return plan
+
+
+def rebuild_month_week_hierarchy(day_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rebuild calendar hierarchy from a flat list of scheduled days."""
+    months: dict[str, dict[str, Any]] = {}
+    weeks: dict[str, dict[str, Any]] = {}
+    for source_day in sorted(day_items, key=lambda item: item["date"]):
+        day_date = date.fromisoformat(source_day["date"])
+        month_key = day_date.strftime("%Y-%m")
+        monday = day_date - timedelta(days=day_date.weekday())
+        week_key = monday.isoformat()
+        day = {
+            **source_day,
+            "total_minutes": sum(
+                int(task.get("duration_minutes", 0))
+                for task in source_day.get("tasks", [])
+            ),
+        }
+        if week_key not in weeks:
+            weeks[week_key] = {
+                "id": str(uuid.uuid4()),
+                "week_start": week_key,
+                "days": [],
+                "total_minutes": 0,
+                "focus_subjects": [],
+            }
+        weeks[week_key]["days"].append(day)
+        if month_key not in months:
+            months[month_key] = {
+                "id": str(uuid.uuid4()),
+                "month": month_key,
+                "weeks": [],
+                "total_minutes": 0,
+                "focus_subjects": [],
+            }
+        months[month_key]["total_minutes"] += day["total_minutes"]
+
+    for week in weeks.values():
+        week["total_minutes"] = sum(day["total_minutes"] for day in week["days"])
+        week["focus_subjects"] = sorted({
+            task["subject"] for day in week["days"] for task in day.get("tasks", [])
+        })
+
+    for month_key, month in months.items():
+        matching_weeks = [
+            week for week in weeks.values()
+            if any(day["date"].startswith(month_key) for day in week["days"])
+        ]
+        month_days = [
+            day for week in matching_weeks for day in week["days"]
+            if day["date"].startswith(month_key)
+        ]
+        month["weeks"] = []
+        for week in matching_weeks:
+            month_days_for_week = [
+                day for day in week["days"] if day["date"].startswith(month_key)
+            ]
+            if not month_days_for_week:
+                continue
+            month["weeks"].append({
+                **week,
+                "days": month_days_for_week,
+                "total_minutes": sum(day["total_minutes"] for day in month_days_for_week),
+            })
+        month["total_minutes"] = sum(day["total_minutes"] for day in month_days)
+        month["focus_subjects"] = sorted({
+            task["subject"] for day in month_days for task in day.get("tasks", [])
+        })
+    return list(months.values())

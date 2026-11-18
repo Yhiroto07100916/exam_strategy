@@ -6,7 +6,7 @@ import math
 import sqlite3
 import uuid
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -24,7 +24,8 @@ DATA = ROOT / "data"
 WEB = ROOT / "web"
 DB = DATA / "exam_strategy.sqlite3"
 from .main_models import is_valid_subject
-from .exam_mode import EXAM_MODES, exam_mode_context, get_exam_mode
+from .exam_mode import EXAM_MODES, exam_mode_context, get_exam_mode, subjects_for_mode
+from .study_planning import (StudyPlanGenerateRequest, StudyPlanReviewRequest, StudyPlanReplanRequest, StudyTaskProgressUpdate, enrich_study_plan_with_ai, generate_study_plan, rebuild_month_week_hierarchy)
 from .target_routes import router as target_router
 from .school_targeting import SchoolScoringModel, SchoolTargetAllocationRequest, allocate_school_targets
 MAX_IMPORT_ROWS = 10000
@@ -219,6 +220,39 @@ def db() -> sqlite3.Connection:
             UNIQUE(school_id, admission_year, course, selection_type)
         )
     """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS study_plans (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            target_date TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            generation_mode TEXT NOT NULL,
+            plan_json TEXT NOT NULL,
+            source_snapshot_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS study_task_progress (
+            plan_id TEXT NOT NULL REFERENCES study_plans(id) ON DELETE CASCADE,
+            task_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            actual_minutes INTEGER,
+            note TEXT NOT NULL DEFAULT '',
+            completed_at TEXT,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(plan_id, task_id)
+        )
+    """)
+    plan_columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(study_plans)")
+    }
+    if "version" not in plan_columns:
+        connection.execute("ALTER TABLE study_plans ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+    if "parent_plan_id" not in plan_columns:
+        connection.execute("ALTER TABLE study_plans ADD COLUMN parent_plan_id TEXT")
     connection.commit()
     return connection
 
@@ -384,6 +418,8 @@ class BackupRestoreRequest(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
     schools: list[dict[str, Any]] = Field(default_factory=list, max_length=5000)
     school_rules: list[dict[str, Any]] = Field(default_factory=list, max_length=20000)
+    study_plans: list[dict[str, Any]] = Field(default_factory=list, max_length=2000)
+    study_task_progress: list[dict[str, Any]] = Field(default_factory=list, max_length=200000)
 
 
 
@@ -681,6 +717,18 @@ def export_backup():
                     "SELECT * FROM school_rules ORDER BY admission_year, selection_type"
                 ).fetchall()
             ],
+            "study_plans": [
+                {**dict(row), "plan_json": json.loads(row["plan_json"]),
+                 "source_snapshot_json": json.loads(row["source_snapshot_json"])}
+                for row in connection.execute(
+                    "SELECT * FROM study_plans ORDER BY created_at"
+                ).fetchall()
+            ],
+            "study_task_progress": [
+                dict(row) for row in connection.execute(
+                    "SELECT * FROM study_task_progress ORDER BY plan_id, task_id"
+                ).fetchall()
+            ],
         }
     finally:
         connection.close()
@@ -773,6 +821,72 @@ def restore_backup(backup: BackupRestoreRequest):
             "profile": backup.settings.get("profile", {}),
             "target": backup.settings.get("target", {}),
         })
+        study_plan_items = []
+        for raw in backup.study_plans:
+            plan_json = raw.get("plan_json")
+            source_snapshot = raw.get("source_snapshot_json", {})
+            if not isinstance(plan_json, dict) or not isinstance(source_snapshot, dict):
+                raise ValueError("学習計画のJSON形式が不正です")
+            plan_id = str(raw["id"])
+            if str(plan_json.get("id")) != plan_id:
+                raise ValueError("学習計画IDが一致しません")
+            plan_start = parse_date(str(raw["start_date"]))
+            plan_target = parse_date(str(raw["target_date"]))
+            if plan_target < plan_start:
+                raise ValueError("学習計画の期間が不正です")
+            version = int(raw.get("version", 1))
+            if version < 1:
+                raise ValueError("学習計画のバージョンが不正です")
+            study_plan_items.append({
+                "id": plan_id,
+                "title": str(raw["title"])[:200],
+                "start_date": plan_start,
+                "target_date": plan_target,
+                "status": str(raw.get("status", "archived")),
+                "generation_mode": str(raw.get("generation_mode", "restored")),
+                "plan_json": json.dumps(plan_json, ensure_ascii=False),
+                "source_snapshot_json": json.dumps(source_snapshot, ensure_ascii=False),
+                "created_at": str(raw["created_at"]),
+                "updated_at": str(raw["updated_at"]),
+                "version": version,
+                "parent_plan_id": raw.get("parent_plan_id"),
+            })
+        study_plan_ids = {item["id"] for item in study_plan_items}
+        if len(study_plan_ids) != len(study_plan_items):
+            raise ValueError("学習計画IDが重複しています")
+        study_progress_items = []
+        task_ids_by_plan = {}
+        for item in study_plan_items:
+            plan = json.loads(item["plan_json"])
+            task_ids_by_plan[item["id"]] = {
+                task.get("id")
+                for month in plan.get("months", [])
+                for week in month.get("weeks", [])
+                for day in week.get("days", [])
+                for task in day.get("tasks", [])
+            }
+        for raw in backup.study_task_progress:
+            plan_id = str(raw["plan_id"])
+            task_id = str(raw["task_id"])
+            if plan_id not in study_plan_ids or task_id not in task_ids_by_plan[plan_id]:
+                raise ValueError("学習実績の参照先計画またはタスクが存在しません")
+            status = str(raw["status"])
+            if status not in {"pending", "completed", "skipped"}:
+                raise ValueError("学習実績の状態が不正です")
+            actual_minutes = raw.get("actual_minutes")
+            if actual_minutes is not None and not 0 <= int(actual_minutes) <= 600:
+                raise ValueError("実績時間が不正です")
+            study_progress_items.append({
+                "plan_id": plan_id,
+                "task_id": task_id,
+                "status": status,
+                "actual_minutes": int(actual_minutes) if actual_minutes is not None else None,
+                "note": str(raw.get("note", ""))[:500],
+                "completed_at": raw.get("completed_at"),
+                "updated_at": str(raw["updated_at"]),
+            })
+        if len({(item["plan_id"], item["task_id"]) for item in study_progress_items}) != len(study_progress_items):
+            raise ValueError("同じ学習タスクの実績が重複しています")
         if len({item["id"] for item in score_items}) != len(score_items):
             raise ValueError("成績IDが重複しています")
         if len({item["id"] for item in question_items}) != len(question_items):
@@ -796,6 +910,8 @@ def restore_backup(backup: BackupRestoreRequest):
     connection = db()
     try:
         connection.execute("BEGIN IMMEDIATE")
+        connection.execute("DELETE FROM study_task_progress")
+        connection.execute("DELETE FROM study_plans")
         connection.execute("DELETE FROM school_rules")
         connection.execute("DELETE FROM schools")
         connection.execute("DELETE FROM questions")
@@ -830,6 +946,29 @@ def restore_backup(backup: BackupRestoreRequest):
                     "id", "name", "prefecture", "school_type", "created_at", "updated_at",
                 ]),
             )
+        for item in study_plan_items:
+            connection.execute(
+                """INSERT INTO study_plans (
+                    id, title, start_date, target_date, status, generation_mode,
+                    plan_json, source_snapshot_json, created_at, updated_at,
+                    version, parent_plan_id
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                tuple(item[key] for key in [
+                    "id", "title", "start_date", "target_date", "status",
+                    "generation_mode", "plan_json", "source_snapshot_json",
+                    "created_at", "updated_at", "version", "parent_plan_id",
+                ]),
+            )
+        for item in study_progress_items:
+            connection.execute(
+                """INSERT INTO study_task_progress (
+                    plan_id, task_id, status, actual_minutes, note, completed_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?)""",
+                tuple(item[key] for key in [
+                    "plan_id", "task_id", "status", "actual_minutes", "note",
+                    "completed_at", "updated_at",
+                ]),
+            )
         for item in school_rule_items:
             connection.execute(
                 """INSERT INTO school_rules (
@@ -859,9 +998,405 @@ def restore_backup(backup: BackupRestoreRequest):
             "questions": len(question_items),
             "schools": len(school_items),
             "school_rules": len(school_rule_items),
+            **({"study_plans": len(study_plan_items)} if study_plan_items else {}),
+            **({"study_task_progress": len(study_progress_items)} if study_progress_items else {}),
         },
         "exam_mode": get_exam_mode(),
     }
+
+
+@app.post("/api/study-plans/generate", status_code=201)
+async def create_study_plan(request: StudyPlanGenerateRequest):
+    connection = db()
+    try:
+        score_rows = connection.execute(
+            "SELECT * FROM scores ORDER BY date, created_at"
+        ).fetchall()
+        question_rows = connection.execute(
+            "SELECT * FROM questions ORDER BY date, subject, unit"
+        ).fetchall()
+        setting_rows = connection.execute(
+            "SELECT key, value FROM settings"
+        ).fetchall()
+        saved_settings = {
+            row["key"]: json.loads(row["value"]) for row in setting_rows
+        }
+        target = saved_settings.get("target", {})
+        try:
+            plan = generate_study_plan(
+                [dict(row) for row in score_rows],
+                [dict(row) for row in question_rows],
+                target,
+                subjects_for_mode(),
+                request,
+            )
+        except ValueError as error:
+            raise HTTPException(422, str(error))
+        plan = await enrich_study_plan_with_ai(plan)
+        now = datetime.now(timezone.utc).isoformat()
+        plan["created_at"] = now
+        plan["version"] = 1
+        plan["parent_plan_id"] = None
+        connection.execute(
+            """INSERT INTO study_plans (
+                id, title, start_date, target_date, status, generation_mode,
+                plan_json, source_snapshot_json, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                plan["id"], plan["title"], plan["start_date"], plan["target_date"],
+                "active", plan["generation_mode"], json.dumps(plan, ensure_ascii=False),
+                json.dumps({"subject_signals": plan["subject_signals"]}, ensure_ascii=False),
+                now, now,
+            ),
+        )
+        connection.commit()
+        return plan
+    finally:
+        connection.close()
+
+
+@app.get("/api/study-plans")
+def list_study_plans():
+    connection = db()
+    try:
+        rows = connection.execute(
+            """SELECT id, title, start_date, target_date, status,
+                      generation_mode, version, parent_plan_id, created_at, updated_at
+               FROM study_plans ORDER BY created_at DESC"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
+
+
+@app.get("/api/study-plans/{plan_id}")
+def get_study_plan(plan_id: str):
+    connection = db()
+    try:
+        row = connection.execute(
+            "SELECT * FROM study_plans WHERE id=?", (plan_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "学習計画が見つかりません")
+        plan = json.loads(row["plan_json"])
+        progress_rows = connection.execute(
+            """SELECT task_id, status, actual_minutes, note, completed_at, updated_at
+               FROM study_task_progress WHERE plan_id=?""",
+            (plan_id,),
+        ).fetchall()
+        plan["progress"] = {item["task_id"]: dict(item) for item in progress_rows}
+        return plan
+    finally:
+        connection.close()
+
+
+@app.post("/api/study-plans/{plan_id}/review")
+def review_study_plan(plan_id: str, request: StudyPlanReviewRequest):
+    connection = db()
+    try:
+        row = connection.execute(
+            "SELECT plan_json FROM study_plans WHERE id=?", (plan_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "学習計画が見つかりません")
+        plan = json.loads(row["plan_json"])
+        today = date.today()
+        monday = date.fromisoformat(request.week_start) if request.week_start else (
+            today - timedelta(days=today.weekday())
+        )
+        sunday = monday + timedelta(days=6)
+        progress_rows = connection.execute(
+            "SELECT * FROM study_task_progress WHERE plan_id=?", (plan_id,)
+        ).fetchall()
+        progress = {item["task_id"]: dict(item) for item in progress_rows}
+        tasks = []
+        for month in plan.get("months", []):
+            for week in month.get("weeks", []):
+                for day_item in week.get("days", []):
+                    task_date = date.fromisoformat(day_item["date"])
+                    if monday <= task_date <= sunday:
+                        for task in day_item.get("tasks", []):
+                            state = progress.get(task["id"], {})
+                            tasks.append({
+                                **task,
+                                "date": day_item["date"],
+                                "status": state.get("status", task.get("status", "pending")),
+                                "actual_minutes": state.get("actual_minutes"),
+                            })
+        planned = sum(item["duration_minutes"] for item in tasks)
+        completed = [item for item in tasks if item["status"] == "completed"]
+        skipped = [item for item in tasks if item["status"] == "skipped"]
+        pending = [item for item in tasks if item["status"] == "pending"]
+        actual = sum(
+            item["actual_minutes"] if item["actual_minutes"] is not None
+            else item["duration_minutes"]
+            for item in completed
+        )
+        subject_summary = {}
+        for task in tasks:
+            entry = subject_summary.setdefault(task["subject"], {
+                "planned_minutes": 0, "completed_tasks": 0, "pending_tasks": 0,
+                "actual_minutes": 0,
+            })
+            entry["planned_minutes"] += task["duration_minutes"]
+            if task["status"] == "completed":
+                entry["completed_tasks"] += 1
+                entry["actual_minutes"] += (
+                    task["actual_minutes"] if task["actual_minutes"] is not None
+                    else task["duration_minutes"]
+                )
+            elif task["status"] == "pending":
+                entry["pending_tasks"] += 1
+        completion_rate = round(len(completed) / len(tasks) * 100, 1) if tasks else 0
+        recommendations = []
+        if not tasks:
+            recommendations.append("この週に予定されたタスクはありません。")
+        elif pending:
+            recommendations.append(
+                f"未完了のタスクが{len(pending)}件あります。すべてを翌日に詰め込まず、残り期間に分散しましょう。"
+            )
+        if skipped:
+            recommendations.append(
+                f"スキップしたタスク{len(skipped)}件は、必要性を見直してから再計画に含めるか決めましょう。"
+            )
+        if actual > planned and planned:
+            recommendations.append("実績時間が予定を上回っています。次週は1日の上限を少し抑えることを検討してください。")
+        elif completed and actual < planned:
+            recommendations.append("予定より短時間で終えられています。理解度を確認し、余裕があれば次の演習へ進みましょう。")
+        if not recommendations:
+            recommendations.append("予定と実績のバランスは良好です。次週も同じペースを基本にしましょう。")
+        return {
+            "plan_id": plan_id,
+            "week_start": monday.isoformat(),
+            "week_end": sunday.isoformat(),
+            "task_count": len(tasks),
+            "completed_count": len(completed),
+            "pending_count": len(pending),
+            "skipped_count": len(skipped),
+            "planned_minutes": planned,
+            "actual_minutes": actual,
+            "completion_rate": completion_rate,
+            "subjects": subject_summary,
+            "recommendations": recommendations,
+        }
+    finally:
+        connection.close()
+
+
+@app.post("/api/study-plans/{plan_id}/replan", status_code=201)
+def replan_study_plan(plan_id: str, request: StudyPlanReplanRequest):
+    connection = db()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT * FROM study_plans WHERE id=?", (plan_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "学習計画が見つかりません")
+        if row["status"] != "active":
+            raise HTTPException(409, "再計画できるのは現在有効な計画だけです")
+        old_plan = json.loads(row["plan_json"])
+        start_date = date.fromisoformat(old_plan["start_date"])
+        target_date = date.fromisoformat(old_plan["target_date"])
+        from_date = date.fromisoformat(request.from_date) if request.from_date else date.today()
+        if from_date < start_date:
+            from_date = start_date
+        if from_date > target_date:
+            raise HTTPException(422, "再計画開始日は目標日以前にしてください")
+
+        progress_rows = connection.execute(
+            "SELECT * FROM study_task_progress WHERE plan_id=?", (plan_id,)
+        ).fetchall()
+        progress = {item["task_id"]: dict(item) for item in progress_rows}
+        availability = {
+            int(key): int(value) for key, value in old_plan.get("availability", {}).items()
+        }
+        flat_days = {}
+        pending_tasks = []
+        for month in old_plan.get("months", []):
+            for week in month.get("weeks", []):
+                for day_item in week.get("days", []):
+                    day_key = day_item["date"]
+                    day_date = date.fromisoformat(day_key)
+                    retained = []
+                    for task in day_item.get("tasks", []):
+                        state = progress.get(task["id"], {})
+                        status = state.get("status", task.get("status", "pending"))
+                        if status == "pending":
+                            pending_tasks.append({**task, "status": "pending"})
+                        else:
+                            retained.append({**task, "status": status})
+                    flat_days[day_key] = {
+                        "date": day_key,
+                        "minutes": int(day_item.get("minutes", availability.get(day_date.isoweekday(), 0))),
+                        "tasks": retained if day_date < from_date else retained,
+                    }
+
+        # Add every remaining available day so newly freed capacity can be used.
+        cursor = from_date
+        while cursor <= target_date:
+            key = cursor.isoformat()
+            if key not in flat_days:
+                flat_days[key] = {
+                    "date": key,
+                    "minutes": availability.get(cursor.isoweekday(), 0),
+                    "tasks": [],
+                }
+            cursor += timedelta(days=1)
+
+        # A completed task on the current day consumes its actual time; skipped
+        # tasks do not consume capacity. Never move completed or skipped work.
+        capacity_by_day = {}
+        for key, day_item in flat_days.items():
+            day_date = date.fromisoformat(key)
+            if day_date < from_date:
+                capacity_by_day[key] = 0
+                continue
+            available_minutes = availability.get(day_date.isoweekday(), 0)
+            reserved = sum(
+                int(progress.get(task["id"], {}).get("actual_minutes")
+                    if progress.get(task["id"], {}).get("actual_minutes") is not None
+                    else task.get("duration_minutes", 0))
+                for task in day_item["tasks"] if task.get("status") == "completed"
+            )
+            capacity_by_day[key] = max(0, available_minutes - reserved)
+
+        pending_tasks.sort(key=lambda item: (item.get("duration_minutes", 0), item.get("subject", "")))
+        pending_tasks.reverse()
+        for task in pending_tasks:
+            duration = int(task.get("duration_minutes", 0))
+            destination = next(
+                (key for key in sorted(capacity_by_day)
+                 if date.fromisoformat(key) >= from_date and capacity_by_day[key] >= duration),
+                None,
+            )
+            if destination is None:
+                total_capacity = sum(capacity_by_day.values())
+                raise HTTPException(
+                    409,
+                    f"残りの学習可能時間が不足しています（未完了タスク{len(pending_tasks)}件、空き時間{total_capacity}分）。"
+                    "学習可能時間を増やすか、不要なタスクをスキップしてから再計画してください。",
+                )
+            flat_days[destination]["tasks"].append(task)
+            capacity_by_day[destination] -= duration
+
+        new_id = str(uuid.uuid4())
+        version = int(row["version"] or 1) + 1
+        new_plan = {
+            **old_plan,
+            "id": new_id,
+            "title": old_plan.get("title", "学習計画") + f"（改訂 v{version}）",
+            "version": version,
+            "parent_plan_id": plan_id,
+            "replan_reason": request.reason,
+            "months": rebuild_month_week_hierarchy(list(flat_days.values())),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        new_plan["total_minutes"] = sum(
+            task.get("duration_minutes", 0)
+            for month in new_plan["months"]
+            for week in month["weeks"]
+            for day_item in week["days"]
+            for task in day_item["tasks"]
+        )
+        new_plan["total_study_days"] = sum(
+            bool(day_item["tasks"])
+            for month in new_plan["months"]
+            for week in month["weeks"]
+            for day_item in week["days"]
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        connection.execute(
+            "UPDATE study_plans SET status='archived', updated_at=? WHERE id=?",
+            (now, plan_id),
+        )
+        connection.execute(
+            """INSERT INTO study_plans (
+                id, title, start_date, target_date, status, generation_mode,
+                plan_json, source_snapshot_json, created_at, updated_at,
+                version, parent_plan_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                new_id, new_plan["title"], new_plan["start_date"], new_plan["target_date"],
+                "active", new_plan["generation_mode"], json.dumps(new_plan, ensure_ascii=False),
+                row["source_snapshot_json"], now, now, version, plan_id,
+            ),
+        )
+        new_task_ids = {
+            task["id"]
+            for month in new_plan["months"]
+            for week in month["weeks"]
+            for day_item in week["days"]
+            for task in day_item["tasks"]
+        }
+        for task_id, state in progress.items():
+            if task_id in new_task_ids:
+                connection.execute(
+                    """INSERT INTO study_task_progress (
+                        plan_id, task_id, status, actual_minutes, note, completed_at, updated_at
+                    ) VALUES (?,?,?,?,?,?,?)""",
+                    (
+                        new_id, task_id, state["status"], state["actual_minutes"],
+                        state["note"], state["completed_at"], state["updated_at"],
+                    ),
+                )
+        connection.commit()
+        return new_plan
+    except HTTPException:
+        connection.rollback()
+        raise
+    except sqlite3.IntegrityError as error:
+        connection.rollback()
+        raise HTTPException(409, f"再計画を保存できませんでした: {error}")
+    finally:
+        connection.close()
+
+
+@app.patch("/api/study-plans/{plan_id}/tasks/{task_id}")
+def update_study_task_progress(
+    plan_id: str, task_id: str, update: StudyTaskProgressUpdate
+):
+    connection = db()
+    try:
+        row = connection.execute(
+            "SELECT plan_json FROM study_plans WHERE id=?", (plan_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "学習計画が見つかりません")
+        plan = json.loads(row["plan_json"])
+        known_task = any(
+            task.get("id") == task_id
+            for month in plan.get("months", [])
+            for week in month.get("weeks", [])
+            for day in week.get("days", [])
+            for task in day.get("tasks", [])
+        )
+        if not known_task:
+            raise HTTPException(404, "学習タスクが見つかりません")
+        now = datetime.now(timezone.utc).isoformat()
+        completed_at = now if update.status == "completed" else None
+        connection.execute(
+            """INSERT INTO study_task_progress (
+                plan_id, task_id, status, actual_minutes, note, completed_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(plan_id, task_id) DO UPDATE SET
+                status=excluded.status,
+                actual_minutes=excluded.actual_minutes,
+                note=excluded.note,
+                completed_at=excluded.completed_at,
+                updated_at=excluded.updated_at""",
+            (
+                plan_id, task_id, update.status, update.actual_minutes,
+                update.note, completed_at, now,
+            ),
+        )
+        connection.commit()
+        return {
+            "plan_id": plan_id, "task_id": task_id, **update.model_dump(),
+            "completed_at": completed_at, "updated_at": now,
+        }
+    finally:
+        connection.close()
 
 
 @app.get("/api/analysis")

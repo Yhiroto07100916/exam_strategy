@@ -60,7 +60,7 @@ if(replanButton){
 if(!confirm('完了・スキップ済みのタスクは残し、未完了タスクを今日以降の空き時間に再配置します。新しい計画バージョンを作成しますか？'))return;
 replanButton.disabled=true;
 try{
-const fromDate=new Date().toISOString().slice(0,10);
+const now=new Date();const fromDate=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
 const revised=await api('/study-plans/'+activeStudyPlan.id+'/replan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from_date:fromDate,reason:'画面から未完了タスクを再配分'})});
 studyPlans=await api('/study-plans');
 activeStudyPlan=await api('/study-plans/'+revised.id);

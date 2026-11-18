@@ -6,7 +6,7 @@ import math
 import sqlite3
 import uuid
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -998,8 +998,8 @@ def restore_backup(backup: BackupRestoreRequest):
             "questions": len(question_items),
             "schools": len(school_items),
             "school_rules": len(school_rule_items),
-            "study_plans": len(study_plan_items),
-            "study_task_progress": len(study_progress_items),
+            **({"study_plans": len(study_plan_items)} if study_plan_items else {}),
+            **({"study_task_progress": len(study_progress_items)} if study_progress_items else {}),
         },
         "exam_mode": get_exam_mode(),
     }

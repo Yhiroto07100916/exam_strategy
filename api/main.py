@@ -1035,6 +1035,8 @@ async def create_study_plan(request: StudyPlanGenerateRequest):
         plan = await enrich_study_plan_with_ai(plan)
         now = datetime.now(timezone.utc).isoformat()
         plan["created_at"] = now
+        plan["version"] = 1
+        plan["parent_plan_id"] = None
         connection.execute(
             """INSERT INTO study_plans (
                 id, title, start_date, target_date, status, generation_mode,
@@ -1059,7 +1061,7 @@ def list_study_plans():
     try:
         rows = connection.execute(
             """SELECT id, title, start_date, target_date, status,
-                      generation_mode, created_at, updated_at
+                      generation_mode, version, parent_plan_id, created_at, updated_at
                FROM study_plans ORDER BY created_at DESC"""
         ).fetchall()
         return [dict(row) for row in rows]

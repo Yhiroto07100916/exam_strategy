@@ -25,7 +25,7 @@ WEB = ROOT / "web"
 DB = DATA / "exam_strategy.sqlite3"
 from .main_models import is_valid_subject
 from .exam_mode import EXAM_MODES, exam_mode_context, get_exam_mode, subjects_for_mode
-from .study_planning import StudyPlanGenerateRequest, StudyTaskProgressUpdate, enrich_study_plan_with_ai, generate_study_plan
+from .study_planning import (StudyPlanGenerateRequest, StudyPlanReviewRequest, StudyPlanReplanRequest, StudyTaskProgressUpdate, enrich_study_plan_with_ai, generate_study_plan, rebuild_month_week_hierarchy)
 from .target_routes import router as target_router
 from .school_targeting import SchoolScoringModel, SchoolTargetAllocationRequest, allocate_school_targets
 MAX_IMPORT_ROWS = 10000
@@ -246,6 +246,13 @@ def db() -> sqlite3.Connection:
             PRIMARY KEY(plan_id, task_id)
         )
     """)
+    plan_columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(study_plans)")
+    }
+    if "version" not in plan_columns:
+        connection.execute("ALTER TABLE study_plans ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+    if "parent_plan_id" not in plan_columns:
+        connection.execute("ALTER TABLE study_plans ADD COLUMN parent_plan_id TEXT")
     connection.commit()
     return connection
 
@@ -411,6 +418,8 @@ class BackupRestoreRequest(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
     schools: list[dict[str, Any]] = Field(default_factory=list, max_length=5000)
     school_rules: list[dict[str, Any]] = Field(default_factory=list, max_length=20000)
+    study_plans: list[dict[str, Any]] = Field(default_factory=list, max_length=2000)
+    study_task_progress: list[dict[str, Any]] = Field(default_factory=list, max_length=200000)
 
 
 
@@ -708,6 +717,18 @@ def export_backup():
                     "SELECT * FROM school_rules ORDER BY admission_year, selection_type"
                 ).fetchall()
             ],
+            "study_plans": [
+                {**dict(row), "plan_json": json.loads(row["plan_json"]),
+                 "source_snapshot_json": json.loads(row["source_snapshot_json"])}
+                for row in connection.execute(
+                    "SELECT * FROM study_plans ORDER BY created_at"
+                ).fetchall()
+            ],
+            "study_task_progress": [
+                dict(row) for row in connection.execute(
+                    "SELECT * FROM study_task_progress ORDER BY plan_id, task_id"
+                ).fetchall()
+            ],
         }
     finally:
         connection.close()
@@ -800,6 +821,72 @@ def restore_backup(backup: BackupRestoreRequest):
             "profile": backup.settings.get("profile", {}),
             "target": backup.settings.get("target", {}),
         })
+        study_plan_items = []
+        for raw in backup.study_plans:
+            plan_json = raw.get("plan_json")
+            source_snapshot = raw.get("source_snapshot_json", {})
+            if not isinstance(plan_json, dict) or not isinstance(source_snapshot, dict):
+                raise ValueError("学習計画のJSON形式が不正です")
+            plan_id = str(raw["id"])
+            if str(plan_json.get("id")) != plan_id:
+                raise ValueError("学習計画IDが一致しません")
+            plan_start = parse_date(str(raw["start_date"]))
+            plan_target = parse_date(str(raw["target_date"]))
+            if plan_target < plan_start:
+                raise ValueError("学習計画の期間が不正です")
+            version = int(raw.get("version", 1))
+            if version < 1:
+                raise ValueError("学習計画のバージョンが不正です")
+            study_plan_items.append({
+                "id": plan_id,
+                "title": str(raw["title"])[:200],
+                "start_date": plan_start,
+                "target_date": plan_target,
+                "status": str(raw.get("status", "archived")),
+                "generation_mode": str(raw.get("generation_mode", "restored")),
+                "plan_json": json.dumps(plan_json, ensure_ascii=False),
+                "source_snapshot_json": json.dumps(source_snapshot, ensure_ascii=False),
+                "created_at": str(raw["created_at"]),
+                "updated_at": str(raw["updated_at"]),
+                "version": version,
+                "parent_plan_id": raw.get("parent_plan_id"),
+            })
+        study_plan_ids = {item["id"] for item in study_plan_items}
+        if len(study_plan_ids) != len(study_plan_items):
+            raise ValueError("学習計画IDが重複しています")
+        study_progress_items = []
+        task_ids_by_plan = {}
+        for item in study_plan_items:
+            plan = json.loads(item["plan_json"])
+            task_ids_by_plan[item["id"]] = {
+                task.get("id")
+                for month in plan.get("months", [])
+                for week in month.get("weeks", [])
+                for day in week.get("days", [])
+                for task in day.get("tasks", [])
+            }
+        for raw in backup.study_task_progress:
+            plan_id = str(raw["plan_id"])
+            task_id = str(raw["task_id"])
+            if plan_id not in study_plan_ids or task_id not in task_ids_by_plan[plan_id]:
+                raise ValueError("学習実績の参照先計画またはタスクが存在しません")
+            status = str(raw["status"])
+            if status not in {"pending", "completed", "skipped"}:
+                raise ValueError("学習実績の状態が不正です")
+            actual_minutes = raw.get("actual_minutes")
+            if actual_minutes is not None and not 0 <= int(actual_minutes) <= 600:
+                raise ValueError("実績時間が不正です")
+            study_progress_items.append({
+                "plan_id": plan_id,
+                "task_id": task_id,
+                "status": status,
+                "actual_minutes": int(actual_minutes) if actual_minutes is not None else None,
+                "note": str(raw.get("note", ""))[:500],
+                "completed_at": raw.get("completed_at"),
+                "updated_at": str(raw["updated_at"]),
+            })
+        if len({(item["plan_id"], item["task_id"]) for item in study_progress_items}) != len(study_progress_items):
+            raise ValueError("同じ学習タスクの実績が重複しています")
         if len({item["id"] for item in score_items}) != len(score_items):
             raise ValueError("成績IDが重複しています")
         if len({item["id"] for item in question_items}) != len(question_items):
@@ -823,6 +910,8 @@ def restore_backup(backup: BackupRestoreRequest):
     connection = db()
     try:
         connection.execute("BEGIN IMMEDIATE")
+        connection.execute("DELETE FROM study_task_progress")
+        connection.execute("DELETE FROM study_plans")
         connection.execute("DELETE FROM school_rules")
         connection.execute("DELETE FROM schools")
         connection.execute("DELETE FROM questions")
@@ -857,6 +946,29 @@ def restore_backup(backup: BackupRestoreRequest):
                     "id", "name", "prefecture", "school_type", "created_at", "updated_at",
                 ]),
             )
+        for item in study_plan_items:
+            connection.execute(
+                """INSERT INTO study_plans (
+                    id, title, start_date, target_date, status, generation_mode,
+                    plan_json, source_snapshot_json, created_at, updated_at,
+                    version, parent_plan_id
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                tuple(item[key] for key in [
+                    "id", "title", "start_date", "target_date", "status",
+                    "generation_mode", "plan_json", "source_snapshot_json",
+                    "created_at", "updated_at", "version", "parent_plan_id",
+                ]),
+            )
+        for item in study_progress_items:
+            connection.execute(
+                """INSERT INTO study_task_progress (
+                    plan_id, task_id, status, actual_minutes, note, completed_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?)""",
+                tuple(item[key] for key in [
+                    "plan_id", "task_id", "status", "actual_minutes", "note",
+                    "completed_at", "updated_at",
+                ]),
+            )
         for item in school_rule_items:
             connection.execute(
                 """INSERT INTO school_rules (
@@ -886,6 +998,8 @@ def restore_backup(backup: BackupRestoreRequest):
             "questions": len(question_items),
             "schools": len(school_items),
             "school_rules": len(school_rule_items),
+            "study_plans": len(study_plan_items),
+            "study_task_progress": len(study_progress_items),
         },
         "exam_mode": get_exam_mode(),
     }

@@ -345,3 +345,38 @@ def test_backup_restore_round_trips_study_plans_and_progress(tmp_path, monkeypat
         fetched = client.get(f"/api/study-plans/{plan['id']}")
         assert fetched.status_code == 200
         assert fetched.json()["progress"][task["id"]]["note"] == "backup test"
+
+
+def test_study_plan_marks_latest_scores_ambiguous_across_exam_types(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        exam_date = date.today().isoformat()
+        common = {
+            "date": exam_date,
+            "exam_name": "同日・同名試験",
+            "subject": "数学",
+            "max_score": 100,
+        }
+        first = client.post("/api/scores", json={
+            **common,
+            "exam_type": "模試",
+            "score": 60,
+        })
+        second = client.post("/api/scores", json={
+            **common,
+            "exam_type": "過去問",
+            "score": 70,
+        })
+        assert first.status_code == 201
+        assert second.status_code == 201
+
+        generated = client.post("/api/study-plans/generate", json={
+            "target_date": (date.today() + timedelta(days=7)).isoformat(),
+            "availability": {str(day): 60 for day in range(1, 8)},
+        })
+
+        assert generated.status_code == 201
+        math_signal = next(
+            item for item in generated.json()["subject_signals"]
+            if item["subject"] == "数学"
+        )
+        assert math_signal["latest_ambiguous"] is True

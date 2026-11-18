@@ -245,7 +245,7 @@ def test_replan_creates_new_version_and_preserves_completed_task(tmp_path, monke
     with make_client(tmp_path, monkeypatch) as client:
         generated = client.post("/api/study-plans/generate", json={
             "target_date": (date.today() + timedelta(days=5)).isoformat(),
-            "availability": {str(day): 60 for day in range(1, 8)},
+            "availability": {str(day): 30 for day in range(1, 8)},
             "session_minutes": 30,
         })
         assert generated.status_code == 201

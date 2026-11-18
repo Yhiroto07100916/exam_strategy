@@ -25,7 +25,7 @@ WEB = ROOT / "web"
 DB = DATA / "exam_strategy.sqlite3"
 from .main_models import is_valid_subject
 from .exam_mode import EXAM_MODES, exam_mode_context, get_exam_mode, subjects_for_mode
-from .study_planning import StudyPlanGenerateRequest, StudyTaskProgressUpdate, generate_study_plan
+from .study_planning import StudyPlanGenerateRequest, StudyTaskProgressUpdate, enrich_study_plan_with_ai, generate_study_plan
 from .target_routes import router as target_router
 from .school_targeting import SchoolScoringModel, SchoolTargetAllocationRequest, allocate_school_targets
 MAX_IMPORT_ROWS = 10000
@@ -892,7 +892,7 @@ def restore_backup(backup: BackupRestoreRequest):
 
 
 @app.post("/api/study-plans/generate", status_code=201)
-def create_study_plan(request: StudyPlanGenerateRequest):
+async def create_study_plan(request: StudyPlanGenerateRequest):
     connection = db()
     try:
         score_rows = connection.execute(
@@ -918,6 +918,7 @@ def create_study_plan(request: StudyPlanGenerateRequest):
             )
         except ValueError as error:
             raise HTTPException(422, str(error))
+        plan = await enrich_study_plan_with_ai(plan)
         now = datetime.now(timezone.utc).isoformat()
         plan["created_at"] = now
         connection.execute(

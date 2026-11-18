@@ -57,6 +57,38 @@ class StudyTaskProgressUpdate(BaseModel):
     note: str = Field(default="", max_length=500)
 
 
+class StudyPlanReviewRequest(BaseModel):
+    week_start: str | None = None
+
+    @field_validator("week_start")
+    @classmethod
+    def validate_week_start(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError as error:
+            raise ValueError("週の開始日はYYYY-MM-DD形式で入力してください") from error
+        if parsed.isoweekday() != 1:
+            raise ValueError("週の開始日は月曜日を指定してください")
+        return parsed.isoformat()
+
+
+class StudyPlanReplanRequest(BaseModel):
+    from_date: str | None = None
+    reason: str = Field(default="学習実績を反映した再調整", max_length=200)
+
+    @field_validator("from_date")
+    @classmethod
+    def validate_from_date(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            return date.fromisoformat(value).isoformat()
+        except ValueError as error:
+            raise ValueError("再計画開始日はYYYY-MM-DD形式で入力してください") from error
+
+
 def _unit_signals(questions: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for item in questions:
@@ -414,3 +446,72 @@ async def enrich_study_plan_with_ai(plan: dict[str, Any]) -> dict[str, Any]:
         plan["ai_status"] = "fallback"
         plan["ai_notice"] = "AI文章生成を利用できなかったため、自動生成した標準タスクを表示しています。"
     return plan
+
+
+def rebuild_month_week_hierarchy(day_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rebuild calendar hierarchy from a flat list of scheduled days."""
+    months: dict[str, dict[str, Any]] = {}
+    weeks: dict[str, dict[str, Any]] = {}
+    for source_day in sorted(day_items, key=lambda item: item["date"]):
+        day_date = date.fromisoformat(source_day["date"])
+        month_key = day_date.strftime("%Y-%m")
+        monday = day_date - timedelta(days=day_date.weekday())
+        week_key = monday.isoformat()
+        day = {
+            **source_day,
+            "total_minutes": sum(
+                int(task.get("duration_minutes", 0))
+                for task in source_day.get("tasks", [])
+            ),
+        }
+        if week_key not in weeks:
+            weeks[week_key] = {
+                "id": str(uuid.uuid4()),
+                "week_start": week_key,
+                "days": [],
+                "total_minutes": 0,
+                "focus_subjects": [],
+            }
+        weeks[week_key]["days"].append(day)
+        if month_key not in months:
+            months[month_key] = {
+                "id": str(uuid.uuid4()),
+                "month": month_key,
+                "weeks": [],
+                "total_minutes": 0,
+                "focus_subjects": [],
+            }
+        months[month_key]["total_minutes"] += day["total_minutes"]
+
+    for week in weeks.values():
+        week["total_minutes"] = sum(day["total_minutes"] for day in week["days"])
+        week["focus_subjects"] = sorted({
+            task["subject"] for day in week["days"] for task in day.get("tasks", [])
+        })
+
+    for month_key, month in months.items():
+        matching_weeks = [
+            week for week in weeks.values()
+            if any(day["date"].startswith(month_key) for day in week["days"])
+        ]
+        month_days = [
+            day for week in matching_weeks for day in week["days"]
+            if day["date"].startswith(month_key)
+        ]
+        month["weeks"] = []
+        for week in matching_weeks:
+            month_days_for_week = [
+                day for day in week["days"] if day["date"].startswith(month_key)
+            ]
+            if not month_days_for_week:
+                continue
+            month["weeks"].append({
+                **week,
+                "days": month_days_for_week,
+                "total_minutes": sum(day["total_minutes"] for day in month_days_for_week),
+            })
+        month["total_minutes"] = sum(day["total_minutes"] for day in month_days)
+        month["focus_subjects"] = sorted({
+            task["subject"] for day in month_days for task in day.get("tasks", [])
+        })
+    return list(months.values())

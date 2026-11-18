@@ -1193,6 +1193,8 @@ def replan_study_plan(plan_id: str, request: StudyPlanReplanRequest):
         ).fetchone()
         if row is None:
             raise HTTPException(404, "学習計画が見つかりません")
+        if row["status"] != "active":
+            raise HTTPException(409, "再計画できるのは現在有効な計画だけです")
         old_plan = json.loads(row["plan_json"])
         start_date = date.fromisoformat(old_plan["start_date"])
         target_date = date.fromisoformat(old_plan["target_date"])

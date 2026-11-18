@@ -3,9 +3,11 @@ from datetime import date, timedelta
 from fastapi.testclient import TestClient
 
 import api.main as api
+import api.study_planning as planning
 
 
 def make_client(tmp_path, monkeypatch):
+    monkeypatch.delenv("STUDY_PLANNER_API_KEY", raising=False)
     monkeypatch.setattr(api, "DB", tmp_path / "study-plan.sqlite3")
     return TestClient(api.app)
 
@@ -134,3 +136,77 @@ def test_study_plans_are_isolated_by_exam_mode(tmp_path, monkeypatch):
         assert len(client.get(
             "/api/study-plans", headers={"X-Exam-Mode": "university"}
         ).json()) == 1
+
+
+def test_ai_provider_only_changes_task_wording(tmp_path, monkeypatch):
+    import json
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{
+                    "message": {
+                        "content": json.dumps({
+                            "items": [{
+                                "subject": "数学",
+                                "unit": "二次関数",
+                                "title": "二次関数の最大・最小を整理",
+                                "instructions": "定義域を確認し、グラフと式の両方で最大値・最小値を求める",
+                            }]
+                        }, ensure_ascii=False)
+                    }
+                }]
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def post(self, url, headers, json):
+            assert url.endswith("/chat/completions")
+            assert headers["Authorization"] == "Bearer test-secret"
+            return FakeResponse()
+
+    monkeypatch.setenv("STUDY_PLANNER_API_KEY", "test-secret")
+    monkeypatch.setattr(planning.httpx, "AsyncClient", FakeAsyncClient)
+
+    with make_client(tmp_path, monkeypatch) as client:
+        client.post("/api/scores", json={
+            "date": date.today().isoformat(),
+            "exam_name": "確認模試",
+            "exam_type": "模試",
+            "subject": "数学",
+            "score": 50,
+            "max_score": 100,
+        })
+        client.post("/api/questions", json={
+            "date": date.today().isoformat(),
+            "exam_name": "確認模試",
+            "exam_type": "模試",
+            "subject": "数学",
+            "unit": "二次関数",
+            "correct": False,
+        })
+        # make_client clears the key by design; set it again after setup.
+        monkeypatch.setenv("STUDY_PLANNER_API_KEY", "test-secret")
+        response = client.post("/api/study-plans/generate", json={
+            "target_date": (date.today() + timedelta(days=7)).isoformat(),
+            "availability": {"6": 50},
+        })
+
+        assert response.status_code == 201
+        plan = response.json()
+        assert plan["generation_mode"] == "ai_assisted"
+        assert plan["ai_status"] == "generated"
+        task = plan["months"][0]["weeks"][0]["days"][0]["tasks"][0]
+        assert task["title"] == "二次関数の最大・最小を整理"
+        assert task["duration_minutes"] == 50

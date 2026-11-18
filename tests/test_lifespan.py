@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 import api.main as api
 
 
-def test_lifespan_initializes_database_and_core_tables_for_each_exam_mode(
+def test_lifespan_initializes_core_and_study_plan_tables_for_each_exam_mode(
     tmp_path, monkeypatch
 ):
     database_path = tmp_path / "exam_strategy.sqlite3"
@@ -23,5 +23,6 @@ def test_lifespan_initializes_database_and_core_tables_for_each_exam_mode(
                     )
                 }
             assert {
-                "scores", "questions", "settings", "schools", "school_rules"
+                "scores", "questions", "settings", "schools", "school_rules",
+                "study_plans", "study_task_progress",
             } <= tables

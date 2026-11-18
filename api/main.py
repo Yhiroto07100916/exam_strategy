@@ -1088,6 +1088,266 @@ def get_study_plan(plan_id: str):
         connection.close()
 
 
+@app.post("/api/study-plans/{plan_id}/review")
+def review_study_plan(plan_id: str, request: StudyPlanReviewRequest):
+    connection = db()
+    try:
+        row = connection.execute(
+            "SELECT plan_json FROM study_plans WHERE id=?", (plan_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "学習計画が見つかりません")
+        plan = json.loads(row["plan_json"])
+        today = date.today()
+        monday = date.fromisoformat(request.week_start) if request.week_start else (
+            today - datetime.timedelta(days=today.weekday())
+        )
+        sunday = monday + timedelta(days=6)
+        progress_rows = connection.execute(
+            "SELECT * FROM study_task_progress WHERE plan_id=?", (plan_id,)
+        ).fetchall()
+        progress = {item["task_id"]: dict(item) for item in progress_rows}
+        tasks = []
+        for month in plan.get("months", []):
+            for week in month.get("weeks", []):
+                for day_item in week.get("days", []):
+                    task_date = date.fromisoformat(day_item["date"])
+                    if monday <= task_date <= sunday:
+                        for task in day_item.get("tasks", []):
+                            state = progress.get(task["id"], {})
+                            tasks.append({
+                                **task,
+                                "date": day_item["date"],
+                                "status": state.get("status", task.get("status", "pending")),
+                                "actual_minutes": state.get("actual_minutes"),
+                            })
+        planned = sum(item["duration_minutes"] for item in tasks)
+        completed = [item for item in tasks if item["status"] == "completed"]
+        skipped = [item for item in tasks if item["status"] == "skipped"]
+        pending = [item for item in tasks if item["status"] == "pending"]
+        actual = sum(
+            item["actual_minutes"] if item["actual_minutes"] is not None
+            else item["duration_minutes"]
+            for item in completed
+        )
+        subject_summary = {}
+        for task in tasks:
+            entry = subject_summary.setdefault(task["subject"], {
+                "planned_minutes": 0, "completed_tasks": 0, "pending_tasks": 0,
+                "actual_minutes": 0,
+            })
+            entry["planned_minutes"] += task["duration_minutes"]
+            if task["status"] == "completed":
+                entry["completed_tasks"] += 1
+                entry["actual_minutes"] += (
+                    task["actual_minutes"] if task["actual_minutes"] is not None
+                    else task["duration_minutes"]
+                )
+            elif task["status"] == "pending":
+                entry["pending_tasks"] += 1
+        completion_rate = round(len(completed) / len(tasks) * 100, 1) if tasks else 0
+        recommendations = []
+        if not tasks:
+            recommendations.append("この週に予定されたタスクはありません。")
+        elif pending:
+            recommendations.append(
+                f"未完了のタスクが{len(pending)}件あります。すべてを翌日に詰め込まず、残り期間に分散しましょう。"
+            )
+        if skipped:
+            recommendations.append(
+                f"スキップしたタスク{len(skipped)}件は、必要性を見直してから再計画に含めるか決めましょう。"
+            )
+        if actual > planned and planned:
+            recommendations.append("実績時間が予定を上回っています。次週は1日の上限を少し抑えることを検討してください。")
+        elif completed and actual < planned:
+            recommendations.append("予定より短時間で終えられています。理解度を確認し、余裕があれば次の演習へ進みましょう。")
+        if not recommendations:
+            recommendations.append("予定と実績のバランスは良好です。次週も同じペースを基本にしましょう。")
+        return {
+            "plan_id": plan_id,
+            "week_start": monday.isoformat(),
+            "week_end": sunday.isoformat(),
+            "task_count": len(tasks),
+            "completed_count": len(completed),
+            "pending_count": len(pending),
+            "skipped_count": len(skipped),
+            "planned_minutes": planned,
+            "actual_minutes": actual,
+            "completion_rate": completion_rate,
+            "subjects": subject_summary,
+            "recommendations": recommendations,
+        }
+    finally:
+        connection.close()
+
+
+@app.post("/api/study-plans/{plan_id}/replan", status_code=201)
+def replan_study_plan(plan_id: str, request: StudyPlanReplanRequest):
+    connection = db()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT * FROM study_plans WHERE id=?", (plan_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "学習計画が見つかりません")
+        old_plan = json.loads(row["plan_json"])
+        start_date = date.fromisoformat(old_plan["start_date"])
+        target_date = date.fromisoformat(old_plan["target_date"])
+        from_date = date.fromisoformat(request.from_date) if request.from_date else date.today()
+        if from_date < start_date:
+            from_date = start_date
+        if from_date > target_date:
+            raise HTTPException(422, "再計画開始日は目標日以前にしてください")
+
+        progress_rows = connection.execute(
+            "SELECT * FROM study_task_progress WHERE plan_id=?", (plan_id,)
+        ).fetchall()
+        progress = {item["task_id"]: dict(item) for item in progress_rows}
+        availability = {
+            int(key): int(value) for key, value in old_plan.get("availability", {}).items()
+        }
+        flat_days = {}
+        pending_tasks = []
+        for month in old_plan.get("months", []):
+            for week in month.get("weeks", []):
+                for day_item in week.get("days", []):
+                    day_key = day_item["date"]
+                    day_date = date.fromisoformat(day_key)
+                    retained = []
+                    for task in day_item.get("tasks", []):
+                        state = progress.get(task["id"], {})
+                        status = state.get("status", task.get("status", "pending"))
+                        if status == "pending":
+                            pending_tasks.append({**task, "status": "pending"})
+                        else:
+                            retained.append({**task, "status": status})
+                    flat_days[day_key] = {
+                        "date": day_key,
+                        "minutes": int(day_item.get("minutes", availability.get(day_date.isoweekday(), 0))),
+                        "tasks": retained if day_date < from_date else retained,
+                    }
+
+        # Add every remaining available day so newly freed capacity can be used.
+        cursor = from_date
+        while cursor <= target_date:
+            key = cursor.isoformat()
+            if key not in flat_days:
+                flat_days[key] = {
+                    "date": key,
+                    "minutes": availability.get(cursor.isoweekday(), 0),
+                    "tasks": [],
+                }
+            cursor += timedelta(days=1)
+
+        # A completed task on the current day consumes its actual time; skipped
+        # tasks do not consume capacity. Never move completed or skipped work.
+        capacity_by_day = {}
+        for key, day_item in flat_days.items():
+            day_date = date.fromisoformat(key)
+            if day_date < from_date:
+                capacity_by_day[key] = 0
+                continue
+            available_minutes = availability.get(day_date.isoweekday(), 0)
+            reserved = sum(
+                int(progress.get(task["id"], {}).get("actual_minutes")
+                    if progress.get(task["id"], {}).get("actual_minutes") is not None
+                    else task.get("duration_minutes", 0))
+                for task in day_item["tasks"] if task.get("status") == "completed"
+            )
+            capacity_by_day[key] = max(0, available_minutes - reserved)
+
+        pending_tasks.sort(key=lambda item: (item.get("duration_minutes", 0), item.get("subject", "")))
+        pending_tasks.reverse()
+        for task in pending_tasks:
+            duration = int(task.get("duration_minutes", 0))
+            destination = next(
+                (key for key in sorted(capacity_by_day)
+                 if date.fromisoformat(key) >= from_date and capacity_by_day[key] >= duration),
+                None,
+            )
+            if destination is None:
+                total_capacity = sum(capacity_by_day.values())
+                raise HTTPException(
+                    409,
+                    f"残りの学習可能時間が不足しています（未完了タスク{len(pending_tasks)}件、空き時間{total_capacity}分）。"
+                    "学習可能時間を増やすか、不要なタスクをスキップしてから再計画してください。",
+                )
+            flat_days[destination]["tasks"].append(task)
+            capacity_by_day[destination] -= duration
+
+        new_id = str(uuid.uuid4())
+        version = int(row["version"] or 1) + 1
+        new_plan = {
+            **old_plan,
+            "id": new_id,
+            "title": old_plan.get("title", "学習計画") + f"（改訂 v{version}）",
+            "version": version,
+            "parent_plan_id": plan_id,
+            "replan_reason": request.reason,
+            "months": rebuild_month_week_hierarchy(list(flat_days.values())),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        new_plan["total_minutes"] = sum(
+            task.get("duration_minutes", 0)
+            for month in new_plan["months"]
+            for week in month["weeks"]
+            for day_item in week["days"]
+            for task in day_item["tasks"]
+        )
+        new_plan["total_study_days"] = sum(
+            bool(day_item["tasks"])
+            for month in new_plan["months"]
+            for week in month["weeks"]
+            for day_item in week["days"]
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        connection.execute(
+            "UPDATE study_plans SET status='archived', updated_at=? WHERE id=?",
+            (now, plan_id),
+        )
+        connection.execute(
+            """INSERT INTO study_plans (
+                id, title, start_date, target_date, status, generation_mode,
+                plan_json, source_snapshot_json, created_at, updated_at,
+                version, parent_plan_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                new_id, new_plan["title"], new_plan["start_date"], new_plan["target_date"],
+                "active", new_plan["generation_mode"], json.dumps(new_plan, ensure_ascii=False),
+                row["source_snapshot_json"], now, now, version, plan_id,
+            ),
+        )
+        new_task_ids = {
+            task["id"]
+            for month in new_plan["months"]
+            for week in month["weeks"]
+            for day_item in week["days"]
+            for task in day_item["tasks"]
+        }
+        for task_id, state in progress.items():
+            if task_id in new_task_ids:
+                connection.execute(
+                    """INSERT INTO study_task_progress (
+                        plan_id, task_id, status, actual_minutes, note, completed_at, updated_at
+                    ) VALUES (?,?,?,?,?,?,?)""",
+                    (
+                        new_id, task_id, state["status"], state["actual_minutes"],
+                        state["note"], state["completed_at"], state["updated_at"],
+                    ),
+                )
+        connection.commit()
+        return new_plan
+    except HTTPException:
+        connection.rollback()
+        raise
+    except sqlite3.IntegrityError as error:
+        connection.rollback()
+        raise HTTPException(409, f"再計画を保存できませんでした: {error}")
+    finally:
+        connection.close()
+
+
 @app.patch("/api/study-plans/{plan_id}/tasks/{task_id}")
 def update_study_task_progress(
     plan_id: str, task_id: str, update: StudyTaskProgressUpdate

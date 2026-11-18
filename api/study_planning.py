@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import calendar
 import uuid
 from collections import defaultdict
 from datetime import date, timedelta
@@ -138,9 +137,10 @@ def generate_study_plan(
     unit_data = _unit_signals(questions)
     target_subjects = target.get("subjects", {}) if isinstance(target, dict) else {}
 
-    available_subjects = list(dict.fromkeys(
-        [*subjects, *score_data.keys(), *unit_data.keys(), *target_subjects.keys()]
+    observed_subjects = list(dict.fromkeys(
+        [*score_data.keys(), *unit_data.keys(), *target_subjects.keys()]
     ))
+    available_subjects = observed_subjects or list(subjects)
     signals = []
     for subject in available_subjects:
         units = unit_data.get(subject, [])
@@ -197,12 +197,11 @@ def generate_study_plan(
 
     daily_tasks = []
     allocated_by_subject: dict[str, int] = defaultdict(int)
-    next_task_subject = 0
+    allocated_by_unit: dict[tuple[str, str], int] = defaultdict(int)
     for day_item in days:
         remaining = day_item["minutes"]
         tasks = []
-        task_count = 0
-        while remaining > 0 and task_count < 4:
+        while remaining > 0:
             duration = min(request.session_minutes, remaining)
             # Weighted deficit scheduling avoids simply repeating the first subject.
             ideal_so_far = sum(allocated_by_subject.values()) + duration
@@ -212,7 +211,10 @@ def generate_study_plan(
                 allocated_by_subject[item["subject"]]
             )
             units = chosen["weak_units"]
-            unit = units[0] if units else None
+            unit = (
+                min(units, key=lambda item: allocated_by_unit[(chosen["subject"], item["unit"])])
+                if units else None
+            )
             task = {
                 "id": str(uuid.uuid4()),
                 "subject": chosen["subject"],
@@ -234,9 +236,9 @@ def generate_study_plan(
             tasks.append(task)
             daily_tasks.append({**task, "date": day_item["date"]})
             allocated_by_subject[chosen["subject"]] += duration
+            if unit:
+                allocated_by_unit[(chosen["subject"], unit["unit"])] += duration
             remaining -= duration
-            task_count += 1
-            next_task_subject += 1
         day_item["tasks"] = tasks
         day_item["total_minutes"] = sum(item["duration_minutes"] for item in tasks)
 

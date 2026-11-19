@@ -90,48 +90,67 @@ def allocate_subject_targets(
             "weight": float(item["weight"]),
         })
 
-    # Reconcile ordinary cent-rounding differences without crossing real bounds.
+    # Preserve the requested precision while reconciling display rounding.
+    # The final adjustment may be fractional, but it must stay within raw score bounds.
     current_display_total = sum(item["current_score"] for item in result)
-    desired_total = max(round(planned_total, 2), current_display_total)
+    desired_total = max(planned_total, current_display_total)
     allocated_total = sum(item["target_score"] for item in result)
-    residual = round(desired_total - allocated_total, 2)
+    residual = desired_total - allocated_total
     subject_inputs = {item["subject"]: item for item in subjects}
 
-    while abs(residual) >= 0.01:
+    while abs(residual) > 1e-9:
         if residual > 0:
             candidates = [
                 item for item in result
-                if item["target_score"] + 0.01
-                <= float(subject_inputs[item["subject"]]["max_score"]) + 1e-9
+                if float(subject_inputs[item["subject"]]["max_score"])
+                - item["target_score"] > 1e-9
             ]
             candidates.sort(
                 key=lambda item: exact_goals[item["subject"]] - item["target_score"],
                 reverse=True,
             )
-            adjustment = 0.01
+            direction = 1
         else:
             candidates = [
                 item for item in result
-                if item["target_score"] - 0.01
-                >= float(subject_inputs[item["subject"]]["current_score"]) - 1e-9
+                if item["target_score"]
+                - float(subject_inputs[item["subject"]]["current_score"]) > 1e-9
             ]
             candidates.sort(
                 key=lambda item: exact_goals[item["subject"]] - item["target_score"]
             )
-            adjustment = -0.01
+            direction = -1
 
         if not candidates:
             break
 
-        item = candidates[0]
-        item["target_score"] = round(item["target_score"] + adjustment, 2)
-        item["increase"] = round(
-            item["target_score"] - item["current_score"], 2
-        )
-        maximum = float(subject_inputs[item["subject"]]["max_score"])
-        item["target_rate"] = round(item["target_score"] / maximum * 100, 1)
-        allocated_total = sum(entry["target_score"] for entry in result)
-        residual = round(desired_total - allocated_total, 2)
+        progressed = False
+        for item in candidates:
+            source = subject_inputs[item["subject"]]
+            if direction > 0:
+                capacity = float(source["max_score"]) - item["target_score"]
+                adjustment = min(residual, capacity)
+            else:
+                capacity = item["target_score"] - float(source["current_score"])
+                adjustment = -min(-residual, capacity)
+
+            if abs(adjustment) <= 1e-9:
+                continue
+
+            item["target_score"] += adjustment
+            item["increase"] = round(
+                item["target_score"] - item["current_score"], 2
+            )
+            maximum = float(source["max_score"])
+            item["target_rate"] = round(item["target_score"] / maximum * 100, 1)
+            allocated_total = sum(entry["target_score"] for entry in result)
+            residual = desired_total - allocated_total
+            progressed = True
+            if abs(residual) <= 1e-9:
+                break
+
+        if not progressed:
+            break
 
     return {
         "current_total": _display_total(current_total),

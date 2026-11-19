@@ -131,3 +131,7 @@ def test_target_allocation_cent_reconciliation_never_drops_below_raw_current_sco
     assert result["planned_total"] == sum(
         subject["target_score"] for subject in result["subjects"]
     )
+    assert abs(result["planned_total"] - 2.763774) < 1e-9
+    assert abs(
+        sum(subject["target_score"] for subject in result["subjects"]) - 2.763774
+    ) < 1e-9

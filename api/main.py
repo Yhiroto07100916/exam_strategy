@@ -1413,6 +1413,7 @@ def analysis():
 
     settings = {row["key"]: json.loads(row["value"]) for row in setting_rows}
     summary = []
+    latest_rate_by_subject: dict[str, float] = {}
     latest_exam = None
     latest_exam_ambiguous = False
     if score_rows:
@@ -1424,6 +1425,8 @@ def analysis():
             latest_keys = latest_on_date_for_subject[["exam_name", "exam_type"]].drop_duplicates()
             latest_ambiguous = len(latest_keys) > 1
             latest = latest_on_date_for_subject.iloc[-1] if not latest_ambiguous else None
+            if not latest_ambiguous:
+                latest_rate_by_subject[str(subject)] = float(latest["rate"])
             summary.append({
                 "subject": subject,
                 "count": int(len(group)),
@@ -1573,7 +1576,9 @@ def analysis():
             or goal_value > target_max
         ):
             continue
-        current_rate = float(subject_summary["latest_rate"])
+        current_rate = latest_rate_by_subject.get(subject_summary["subject"])
+        if current_rate is None:
+            continue
         comparable_current = current_rate / 100 * target_max
         target_gaps.append({
             "subject": subject_summary["subject"],

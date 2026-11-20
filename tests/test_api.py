@@ -1949,3 +1949,39 @@ def test_backup_restore_rejects_malformed_content_length_without_replacing_data(
         assert len(saved) == 1
         assert saved[0]["id"] == created.json()["id"]
         assert saved[0]["score"] == 74.0
+
+def test_target_gap_uses_full_precision_before_rescaling_maximum(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        created = client.post("/api/scores", json={
+            "date": "2026-11-01",
+            "exam_name": "11月模試",
+            "exam_type": "模試",
+            "subject": "数学",
+            "score": 1,
+            "max_score": 3,
+        })
+        assert created.status_code == 201
+
+        settings = client.put("/api/settings", json={
+            "profile": {},
+            "target": {
+                "subjects": {
+                    "数学": {"target_score": 16.7, "max_score": 50}
+                }
+            },
+        })
+        assert settings.status_code == 200
+
+        result = client.get("/api/analysis").json()
+        assert result["summary"][0]["latest_rate"] == 33.3
+        assert result["target_gaps"] == [{
+            "subject": "数学",
+            "current": 1.0,
+            "current_max_score": 3.0,
+            "current_rate": 33.3,
+            "comparable_current": 16.7,
+            "target": 16.7,
+            "target_max_score": 50.0,
+            "gap": 0.0,
+            "max_score": 50.0,
+        }]

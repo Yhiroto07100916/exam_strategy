@@ -1985,3 +1985,48 @@ def test_target_gap_uses_full_precision_before_rescaling_maximum(tmp_path, monke
             "gap": 0.0,
             "max_score": 50.0,
         }]
+
+def test_ocr_confirm_rolls_back_entire_batch_when_one_insert_fails(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        connection = sqlite3.connect(api.DB)
+        try:
+            connection.execute(
+                """
+                CREATE TRIGGER reject_english_ocr_score
+                BEFORE INSERT ON scores
+                WHEN NEW.subject = '英語'
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced OCR insert failure');
+                END
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        response = client.post("/api/import/ocr-confirm", json={
+            "scores": [
+                {
+                    "date": "2026-11-22",
+                    "exam_name": "OCR確認テスト",
+                    "exam_type": "模試",
+                    "subject": "数学",
+                    "score": 70,
+                    "max_score": 100,
+                },
+                {
+                    "date": "2026-11-22",
+                    "exam_name": "OCR確認テスト",
+                    "exam_type": "模試",
+                    "subject": "英語",
+                    "score": 80,
+                    "max_score": 100,
+                },
+            ]
+        })
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "OCR結果の保存に失敗しました。データは保存されていません"
+        )
+        assert client.get("/api/scores").json() == []

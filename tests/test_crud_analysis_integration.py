@@ -267,3 +267,142 @@ def test_question_edit_moves_record_between_exam_unit_trends(tmp_path, monkeypat
         final = client.get("/api/analysis").json()
         assert final["weak_units"] == []
         assert final["unit_trends"] == []
+
+
+def test_score_and_question_crud_are_isolated_between_exam_modes(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        university_headers = {"X-Exam-Mode": "university"}
+
+        high_school_score = client.post("/api/scores", json={
+            "date": "2026-11-20",
+            "exam_name": "高校受験模試",
+            "exam_type": "模試",
+            "subject": "数学",
+            "score": 72,
+            "max_score": 100,
+        })
+        high_school_question = client.post("/api/questions", json={
+            "date": "2026-11-20",
+            "exam_name": "高校受験模試",
+            "exam_type": "模試",
+            "subject": "数学",
+            "unit": "二次関数",
+            "correct": False,
+            "points": 10,
+            "earned_points": 3,
+        })
+        university_score = client.post(
+            "/api/scores",
+            headers=university_headers,
+            json={
+                "date": "2026-11-21",
+                "exam_name": "大学受験模試",
+                "exam_type": "共通テスト",
+                "subject": "数学IA",
+                "score": 140,
+                "max_score": 200,
+            },
+        )
+        university_question = client.post(
+            "/api/questions",
+            headers=university_headers,
+            json={
+                "date": "2026-11-21",
+                "exam_name": "大学受験模試",
+                "exam_type": "共通テスト",
+                "subject": "数学IA",
+                "unit": "数列",
+                "correct": False,
+                "points": 10,
+                "earned_points": 4,
+            },
+        )
+
+        assert high_school_score.status_code == 201
+        assert high_school_question.status_code == 201
+        assert university_score.status_code == 201
+        assert university_question.status_code == 201
+
+        high_school_score_id = high_school_score.json()["id"]
+        high_school_question_id = high_school_question.json()["id"]
+        university_score_id = university_score.json()["id"]
+        university_question_id = university_question.json()["id"]
+
+        assert [row["id"] for row in client.get("/api/scores").json()] == [
+            high_school_score_id
+        ]
+        assert [row["id"] for row in client.get("/api/questions").json()] == [
+            high_school_question_id
+        ]
+        assert [
+            row["id"]
+            for row in client.get("/api/scores", headers=university_headers).json()
+        ] == [university_score_id]
+        assert [
+            row["id"]
+            for row in client.get("/api/questions", headers=university_headers).json()
+        ] == [university_question_id]
+
+        updated_score = client.put(
+            f"/api/scores/{university_score_id}",
+            headers=university_headers,
+            json={
+                "date": "2026-11-22",
+                "exam_name": "大学受験模試",
+                "exam_type": "共通テスト",
+                "subject": "数学IA",
+                "score": 150,
+                "max_score": 200,
+            },
+        )
+        updated_question = client.put(
+            f"/api/questions/{university_question_id}",
+            headers=university_headers,
+            json={
+                "date": "2026-11-21",
+                "exam_name": "大学受験模試",
+                "exam_type": "共通テスト",
+                "subject": "数学IA",
+                "unit": "ベクトル",
+                "correct": False,
+                "points": 10,
+                "earned_points": 4,
+            },
+        )
+        assert updated_score.status_code == 200
+        assert updated_question.status_code == 200
+
+        assert client.delete(f"/api/scores/{high_school_score_id}").status_code == 204
+        assert client.delete(f"/api/questions/{high_school_question_id}").status_code == 204
+
+        high_school_analysis = client.get("/api/analysis").json()
+        assert client.get("/api/scores").json() == []
+        assert client.get("/api/questions").json() == []
+        assert high_school_analysis["summary"] == []
+        assert high_school_analysis["weak_units"] == []
+        assert high_school_analysis["unit_trends"] == []
+
+        university_analysis = client.get(
+            "/api/analysis", headers=university_headers
+        ).json()
+        assert [
+            row["id"]
+            for row in client.get("/api/scores", headers=university_headers).json()
+        ] == [university_score_id]
+        assert [
+            row["id"]
+            for row in client.get("/api/questions", headers=university_headers).json()
+        ] == [university_question_id]
+        university_subject = next(
+            row for row in university_analysis["summary"]
+            if row["subject"] == "数学IA"
+        )
+        assert university_subject["latest_score"] == 150
+        assert university_analysis["weak_units"] == [{
+            "exam_type": "共通テスト",
+            "subject": "数学IA",
+            "unit": "ベクトル",
+            "questions": 1,
+            "accuracy": 40.0,
+            "calculation": "points",
+        }]

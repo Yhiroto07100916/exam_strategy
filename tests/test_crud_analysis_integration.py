@@ -406,3 +406,160 @@ def test_score_and_question_crud_are_isolated_between_exam_modes(tmp_path, monke
             "accuracy": 40.0,
             "calculation": "points",
         }]
+
+
+
+def test_cross_mode_ids_cannot_be_read_updated_or_deleted(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        university_headers = {"X-Exam-Mode": "university"}
+
+        high_school_score = client.post("/api/scores", json={
+            "date": "2026-11-20",
+            "exam_name": "高校受験模試",
+            "exam_type": "模試",
+            "subject": "数学",
+            "score": 72,
+            "max_score": 100,
+        })
+        high_school_question = client.post("/api/questions", json={
+            "date": "2026-11-20",
+            "exam_name": "高校受験模試",
+            "exam_type": "模試",
+            "subject": "数学",
+            "unit": "二次関数",
+            "correct": False,
+            "points": 10,
+            "earned_points": 3,
+        })
+        university_score = client.post(
+            "/api/scores",
+            headers=university_headers,
+            json={
+                "date": "2026-11-21",
+                "exam_name": "大学受験模試",
+                "exam_type": "共通テスト",
+                "subject": "数学IA",
+                "score": 140,
+                "max_score": 200,
+            },
+        )
+        university_question = client.post(
+            "/api/questions",
+            headers=university_headers,
+            json={
+                "date": "2026-11-21",
+                "exam_name": "大学受験模試",
+                "exam_type": "共通テスト",
+                "subject": "数学IA",
+                "unit": "数列",
+                "correct": False,
+                "points": 10,
+                "earned_points": 4,
+            },
+        )
+
+        assert high_school_score.status_code == 201
+        assert high_school_question.status_code == 201
+        assert university_score.status_code == 201
+        assert university_question.status_code == 201
+
+        high_school_score_id = high_school_score.json()["id"]
+        high_school_question_id = high_school_question.json()["id"]
+        university_score_id = university_score.json()["id"]
+        university_question_id = university_question.json()["id"]
+
+        # University mode must not be able to mutate high-school records.
+        assert client.put(
+            f"/api/scores/{high_school_score_id}",
+            headers=university_headers,
+            json={
+                "date": "2026-11-22",
+                "exam_name": "誤更新テスト",
+                "exam_type": "共通テスト",
+                "subject": "数学IA",
+                "score": 1,
+                "max_score": 200,
+            },
+        ).status_code == 404
+        assert client.delete(
+            f"/api/scores/{high_school_score_id}",
+            headers=university_headers,
+        ).status_code == 404
+        assert client.put(
+            f"/api/questions/{high_school_question_id}",
+            headers=university_headers,
+            json={
+                "date": "2026-11-22",
+                "exam_name": "誤更新テスト",
+                "exam_type": "共通テスト",
+                "subject": "数学IA",
+                "unit": "ベクトル",
+                "correct": True,
+                "points": 10,
+                "earned_points": 10,
+            },
+        ).status_code == 404
+        assert client.delete(
+            f"/api/questions/{high_school_question_id}",
+            headers=university_headers,
+        ).status_code == 404
+
+        # High-school mode must not be able to mutate university records.
+        assert client.put(
+            f"/api/scores/{university_score_id}",
+            json={
+                "date": "2026-11-22",
+                "exam_name": "誤更新テスト",
+                "exam_type": "模試",
+                "subject": "数学",
+                "score": 1,
+                "max_score": 100,
+            },
+        ).status_code == 404
+        assert client.delete(f"/api/scores/{university_score_id}").status_code == 404
+        assert client.put(
+            f"/api/questions/{university_question_id}",
+            json={
+                "date": "2026-11-22",
+                "exam_name": "誤更新テスト",
+                "exam_type": "模試",
+                "subject": "数学",
+                "unit": "図形",
+                "correct": True,
+                "points": 10,
+                "earned_points": 10,
+            },
+        ).status_code == 404
+        assert client.delete(f"/api/questions/{university_question_id}").status_code == 404
+
+        # Failed cross-mode operations must leave both databases unchanged.
+        high_school_scores = client.get("/api/scores").json()
+        high_school_questions = client.get("/api/questions").json()
+        university_scores = client.get(
+            "/api/scores", headers=university_headers
+        ).json()
+        university_questions = client.get(
+            "/api/questions", headers=university_headers
+        ).json()
+
+        assert [(row["id"], row["score"]) for row in high_school_scores] == [
+            (high_school_score_id, 72)
+        ]
+        assert [(row["id"], row["unit"]) for row in high_school_questions] == [
+            (high_school_question_id, "二次関数")
+        ]
+        assert [(row["id"], row["score"]) for row in university_scores] == [
+            (university_score_id, 140)
+        ]
+        assert [(row["id"], row["unit"]) for row in university_questions] == [
+            (university_question_id, "数列")
+        ]
+
+        high_school_analysis = client.get("/api/analysis").json()
+        university_analysis = client.get(
+            "/api/analysis", headers=university_headers
+        ).json()
+        assert high_school_analysis["summary"][0]["latest_score"] == 72
+        assert high_school_analysis["weak_units"][0]["unit"] == "二次関数"
+        assert university_analysis["summary"][0]["latest_score"] == 140
+        assert university_analysis["weak_units"][0]["unit"] == "数列"

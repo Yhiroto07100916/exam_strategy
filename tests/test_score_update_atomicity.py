@@ -74,3 +74,33 @@ def test_score_update_is_atomic_and_preserves_creation_timestamp(tmp_path, monke
         analysis_after_conflict = client.get("/api/analysis").json()
         assert analysis_after_conflict["latest_exam"] == analysis_before_conflict["latest_exam"]
         assert analysis_after_conflict["summary"] == analysis_before_conflict["summary"]
+
+
+
+def test_invalid_score_update_preserves_existing_record_and_analysis(tmp_path, monkeypatch):
+    with make_client(tmp_path, monkeypatch) as client:
+        payload = {
+            "date": "2026-11-01",
+            "exam_name": "11月模試",
+            "exam_type": "模試",
+            "subject": "数学",
+            "score": 72,
+            "max_score": 100,
+        }
+        created = client.post("/api/scores", json=payload)
+        assert created.status_code == 201
+        item_id = created.json()["id"]
+
+        before_record = client.get("/api/scores").json()[0]
+        before_analysis = client.get("/api/analysis").json()
+
+        invalid_update = client.put(
+            f"/api/scores/{item_id}",
+            json={**payload, "score": 101},
+        )
+        assert invalid_update.status_code == 422
+
+        after_records = client.get("/api/scores").json()
+        after_analysis = client.get("/api/analysis").json()
+        assert after_records == [before_record]
+        assert after_analysis == before_analysis

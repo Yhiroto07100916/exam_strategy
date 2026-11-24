@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+
 import api.main as api
 
 
@@ -43,6 +44,11 @@ def test_score_update_is_atomic_and_preserves_creation_timestamp(tmp_path, monke
         assert updated.json()["date"] == "2026-10-03"
         assert updated.json()["score"] == 82
 
+        analysis_before_conflict = client.get("/api/analysis").json()
+        assert analysis_before_conflict["latest_exam"]["name"] == "12月模試"
+        assert analysis_before_conflict["latest_exam"]["total"] == 82
+        assert analysis_before_conflict["summary"][0]["latest_score"] == 82
+
         conflicting_update = client.put(
             f"/api/scores/{first_id}",
             json={
@@ -64,3 +70,7 @@ def test_score_update_is_atomic_and_preserves_creation_timestamp(tmp_path, monke
         assert saved[first_id]["score"] == 82
         assert saved[first_id]["created_at"] == created_at
         assert saved[second.json()["id"]]["score"] == 75
+
+        analysis_after_conflict = client.get("/api/analysis").json()
+        assert analysis_after_conflict["latest_exam"] == analysis_before_conflict["latest_exam"]
+        assert analysis_after_conflict["summary"] == analysis_before_conflict["summary"]

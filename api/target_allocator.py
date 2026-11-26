@@ -73,7 +73,7 @@ def allocate_subject_targets(
         maximum = float(item["max_score"])
         goal = min(maximum, current + allocations[item["subject"]])
         exact_goals[item["subject"]] = goal
-        displayed_current = _display_score(current, minimum=0, maximum=maximum)
+        displayed_current = _display_score(current, minimum=0, maximum=goal)
         displayed_goal = _display_score(
             goal, minimum=current, maximum=maximum
         )

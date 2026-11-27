@@ -215,7 +215,15 @@ if(!Number.isFinite(score)||!Number.isFinite(maximum)||maximum<=0||score>maximum
 }
 const confirmed=rows.map(row=>({date:row.querySelector('[data-ocr-date]').value,exam_name:row.querySelector('[data-ocr-name]').value,exam_type:row.querySelector('[data-ocr-exam-type]').value,subject:row.querySelector('[data-ocr-subject]').value,score:Number(row.querySelector('[data-ocr-score]').value),max_score:Number(row.querySelector('[data-ocr-max]').value)}));
 const button=$('#ocr-confirm');button.disabled=true;
-try{const result=await api('/import/ocr-confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scores:confirmed})});$('#ocr-candidates').innerHTML='';toast(result.imported+'件登録 / 重複 '+result.duplicates+'件');await refresh()}catch(x){toast(x.message);button.disabled=queryAll('.ocr-row').length===0?true:false}
+try{
+await window.runOcrConfirmationFlow({
+submit:()=>api('/import/ocr-confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scores:confirmed})}),
+clearPreview:clearOcrPreview,
+refresh,
+notifySaved:result=>toast(result.imported+'件登録 / 重複 '+result.duplicates+'件'),
+notifyRefreshFailure:()=>toast('登録は完了しましたが、画面の更新に失敗しました。更新ボタンで再読み込みしてください')
+});
+}catch(x){toast(x.message);button.disabled=queryAll('.ocr-row').length===0?true:false}
 };
 
 $('#school-form').onsubmit=async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.target));try{await api('/schools',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});e.target.reset();await refresh();toast('学校を登録しました')}catch(x){toast(x.message)}};
